@@ -39,7 +39,6 @@ MEDIA_DIR = "image"
 
 admin_notification_ids = {}
 
-# KORRIGIERT: Tippfehler von 'asctime_s' zu 'asctime'
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -61,34 +60,31 @@ def load_stats():
 def save_stats(stats):
     with open(STATS_FILE, "w") as f: json.dump(stats, f, indent=4)
 
-# NEU: Funktion zum Prüfen und Senden des Inaktivitäts-Rabatts
+# GEÄNDERT: Rabatt-Funktion nutzt nun 'first_start' aus stats.json
 async def check_and_send_inactivity_discount(context: ContextTypes.DEFAULT_TYPE, user: User):
-    """Prüft beim /start Befehl, ob der Nutzer für einen Rabatt qualifiziert ist."""
     if str(user.id) == ADMIN_USER_ID or not NOTIFICATION_GROUP_ID:
         return
 
     stats = load_stats()
-    user_log = stats.get("admin_logs", {}).get(str(user.id))
+    user_id_str = str(user.id)
+    user_data = stats.get("users", {}).get(user_id_str)
+    user_log = stats.get("admin_logs", {}).get(user_id_str)
 
-    # Nur fortfahren, wenn es einen Admin-Log-Eintrag für den Nutzer gibt
-    if not user_log or "message_id" not in user_log:
+    # Benötigt Nutzerdaten (für 'first_start') und Admin-Log (für die Message-ID)
+    if not user_data or "first_start" not in user_data or not user_log or "message_id" not in user_log:
         return
 
     log_message_id = user_log["message_id"]
     try:
-        # Nachricht aus der Admin-Gruppe abrufen, um das Datum und den Text zu prüfen
+        # Prüfen, ob der Rabatt bereits gesendet wurde (anhand des Markers in der Admin-Nachricht)
         admin_message = await context.bot.get_chat_message(chat_id=NOTIFICATION_GROUP_ID, message_id=log_message_id)
-        
-        # Prüfen, ob der Rabatt bereits gesendet wurde (anhand eines Markers in der Nachricht)
         if "💸" in admin_message.text:
             return
 
-        # Zeitdifferenz berechnen (Zeitzonen-naive Umwandlung)
-        message_date_utc = admin_message.date
-        message_date_local = message_date_utc.replace(tzinfo=None)
+        # Zeitdifferenz basierend auf dem ersten Startzeitpunkt berechnen
+        first_start_dt = datetime.fromisoformat(user_data["first_start"])
         
-        if datetime.now() - message_date_local >= timedelta(hours=2):
-            # Rabatt an den Nutzer senden
+        if datetime.now() - first_start_dt >= timedelta(hours=2):
             text = (
                 "👋 Hey, wir vermissen dich!\n\n"
                 "Als kleines Dankeschön für dein Interesse schenken wir dir **1€ Rabatt** auf dein nächstes Paket. ✨\n\n"
@@ -120,6 +116,7 @@ async def track_event(event_name: str, context: ContextTypes.DEFAULT_TYPE, user_
     save_stats(stats)
     await update_pinned_summary(context)
 
+# GEÄNDERT: Speichert jetzt auch den 'first_start' Zeitstempel für neue Nutzer
 async def check_user_status(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     if str(user_id) == ADMIN_USER_ID: return "admin", False
     stats = load_stats()
@@ -128,69 +125,66 @@ async def check_user_status(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     user_data = stats.get("users", {}).get(user_id_str)
 
     if user_data is None:
-        stats.get("users", {})[user_id_str] = {"last_start": now.isoformat()}
+        stats["users"][user_id_str] = {
+            "last_start": now.isoformat(),
+            "first_start": now.isoformat()  # NEU: Erster Startzeitpunkt wird hier gesetzt
+        }
         save_stats(stats)
         await update_pinned_summary(context)
         return "new", True
 
     last_start_dt = datetime.fromisoformat(user_data.get("last_start"))
-
+    
     if now - last_start_dt > timedelta(hours=24):
         stats["users"][user_id_str]["last_start"] = now.isoformat()
         save_stats(stats)
         return "returning", True
-
+    
     stats["users"][user_id_str]["last_start"] = now.isoformat()
     save_stats(stats)
     return "active", False
 
-async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: User, event_text: str = "", base_text_override: str = None):
-    if NOTIFICATION_GROUP_ID and str(user.id) != ADMIN_USER_ID:
-        user_id_str = str(user.id)
-        stats = load_stats()
-        admin_logs = stats.get("admin_logs", {})
+# GEÄNDERT: Diese Funktion ist nun die einzige, die Admin-Nachrichten erstellt und aktualisiert.
+async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: User, event_text: str = ""):
+    if not NOTIFICATION_GROUP_ID or str(user.id) == ADMIN_USER_ID:
+        return
 
-        user_log = admin_logs.get(user_id_str, {})
-        base_text = user_log.get("base_text")
-        log_message_id = user_log.get("message_id")
+    user_id_str = str(user.id)
+    stats = load_stats()
+    user_log = stats.get("admin_logs", {}).get(user_id_str, {})
+    
+    base_text = user_log.get("base_text")
+    log_message_id = user_log.get("message_id")
 
-        if base_text_override:
-            base_text = base_text_override
-            user_log["base_text"] = base_text
-        
-        if not base_text:
-            username_str = f"\n*Benutzername:* @{user.username}" if user.username else ""
-            base_text = f"👤 *Nutzer-Aktivität*\n\n*ID:* `{user.id}`\n*Name:* {user.first_name}{username_str}"
-            user_log["base_text"] = base_text
-        
-        final_text = f"{base_text}\n\n`Aktion: {event_text}`".strip() if event_text else base_text
-        
+    # Wenn noch keine Basis-Nachricht existiert, erstelle sie jetzt
+    if not base_text:
+        username_str = f"\n*Benutzername:* @{user.username}" if user.username else ""
+        base_text = f"👤 *Nutzer-Aktivität*\n\n*ID:* `{user.id}`\n*Name:* {user.first_name}{username_str}"
+        user_log["base_text"] = base_text # Speichere die Basis für zukünftige Updates
+
+    # Füge den aktuellen Event-Text hinzu
+    final_text = f"{base_text}\n\n`Aktion: {event_text}`".strip()
+
+    try:
         if log_message_id:
-            try:
-                await context.bot.edit_message_text(chat_id=NOTIFICATION_GROUP_ID, message_id=log_message_id, text=final_text, parse_mode='Markdown')
-                stats["admin_logs"][user_id_str] = user_log
-                save_stats(stats)
-                return
-            except error.TelegramError: pass
-        try:
+            # Versuche, die existierende Nachricht zu bearbeiten
+            await context.bot.edit_message_text(chat_id=NOTIFICATION_GROUP_ID, message_id=log_message_id, text=final_text, parse_mode='Markdown')
+        else:
+            # Wenn es keine Nachrichten-ID gibt, sende eine neue Nachricht
             sent_message = await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=final_text, parse_mode='Markdown')
             user_log["message_id"] = sent_message.message_id
             stats["admin_logs"][user_id_str] = user_log
             save_stats(stats)
-        except Exception as e:
-            logger.error(f"Konnte Admin-Log nicht senden/bearbeiten: {e}")
+    except error.BadRequest as e:
+        if "message is not modified" in str(e):
+            pass # Ignoriere Fehler, wenn die Nachricht identisch ist
+        else:
+            logger.error(f"Fehler beim Bearbeiten der Admin-Nachricht für {user.id}: {e}")
+    except Exception as e:
+        logger.error(f"Konnte Admin-Log nicht senden/bearbeiten für {user.id}: {e}")
 
-async def delete_last_admin_notification(context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    if NOTIFICATION_GROUP_ID and str(user_id) != ADMIN_USER_ID:
-        stats = load_stats()
-        admin_logs = stats.get("admin_logs", {})
-        user_log = admin_logs.get(str(user_id))
-        if user_log and "message_id" in user_log:
-            try:
-                await context.bot.delete_message(chat_id=NOTIFICATION_GROUP_ID, message_id=user_log["message_id"])
-                del stats["admin_logs"][str(user_id)]
-                save_stats(stats)
-            except error.TelegramError: pass
+# ENTFERNT: Diese Funktion wird nicht mehr benötigt, da Nachrichten nicht mehr gelöscht werden.
+# async def delete_last_admin_notification(...):
 
 async def send_permanent_admin_notification(context: ContextTypes.DEFAULT_TYPE, message: str):
     if NOTIFICATION_GROUP_ID:
@@ -298,15 +292,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     status, should_notify = await check_user_status(user.id, context)
     await track_event("start_command", context, user.id)
 
+    # GEÄNDERT: Vereinfachte Logik, die immer send_or_update_admin_log aufruft
     if should_notify:
         if status == "new":
-            message = f"🎉 *Neuer Nutzer gestartet!*\n\n*ID:* `{user.id}`\n*Name:* {user.first_name}"
-            username_str = f"\n*Benutzername:* @{user.username}" if user.username else ""
-            await send_or_update_admin_log(context, user, base_text_override=message+username_str)
+            await send_or_update_admin_log(context, user, "Gestartet (Neu)")
         elif status == "returning":
-            message = f"🔄 *Wiederkehrender Nutzer!*\n\n*ID:* `{user.id}`\n*Name:* {user.first_name}"
-            username_str = f"\n*Benutzername:* @{user.username}" if user.username else ""
-            await send_or_update_admin_log(context, user, base_text_override=message+username_str)
+            await send_or_update_admin_log(context, user, "Gestartet (Wiederkehrend)")
             
     context.user_data.clear(); chat_id = update.effective_chat.id; await cleanup_previous_messages(chat_id, context)
     welcome_text = ( "Herzlich Willkommen! ✨\n\n" "Hier kannst du eine Vorschau meiner Inhalte sehen oder direkt ein Paket auswählen. " "Die gesamte Bedienung erfolgt über die Buttons.")
@@ -338,8 +329,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         pdf_buffer = BytesIO(pdf.output(dest='S').encode('latin-1')); pdf_buffer.seek(0)
         today_str = datetime.now().strftime("%Y-%m-%d"); await context.bot.send_document(chat_id=chat_id, document=pdf_buffer, filename=f"Gutschein-Report_{today_str}.pdf", caption="Hier ist dein aktueller Gutschein-Report.")
         return
+    # GEÄNDERT: delete_last_admin_notification wurde entfernt
     if data in ["main_menu", "show_price_options"]:
-        await delete_last_admin_notification(context, user.id)
         await cleanup_previous_messages(chat_id, context)
         try: await query.edit_message_text(text="⏳"); await asyncio.sleep(0.5)
         except Exception: pass
@@ -377,11 +368,36 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception: pass
         _, schwester_code, action = data.split(":")
         await track_event(f"{action}_{schwester_code}", context, user.id)
-        await send_or_update_admin_log(context, user, f"Schaut sich {action} von {schwester_code.upper()} an")
+        
         if action == "preview":
+            limit_reached = False
+            stats = load_stats()
+            user_log = stats.get("admin_logs", {}).get(str(user.id))
+            if user_log and "message_id" in user_log:
+                try:
+                    admin_message = await context.bot.get_chat_message(chat_id=NOTIFICATION_GROUP_ID, message_id=user_log["message_id"])
+                    if "🚫" in admin_message.text:
+                        limit_reached = True
+                except Exception:
+                    pass
+            
+            if limit_reached:
+                await send_or_update_admin_log(context, user, f"Versucht Vorschau zu sehen (Limit erreicht)")
+                limit_text = "Du hast das Vorschau-Limit von 25 Bildern bereits erreicht. 😥\n\nBitte wähle nun ein Paket aus, um die volle Auswahl zu sehen."
+                limit_keyboard = [
+                    [InlineKeyboardButton("Kleine Schwester (Preise)", callback_data="select_schwester:ks:prices"), 
+                     InlineKeyboardButton("Große Schwester (Preise)", callback_data="select_schwester:gs:prices")],
+                    [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]
+                ]
+                await context.bot.send_message(chat_id=chat_id, text=limit_text, reply_markup=InlineKeyboardMarkup(limit_keyboard))
+                return
+            
+            await send_or_update_admin_log(context, user, f"Startet Vorschau ({schwester_code.upper()})")
             context.user_data['preview_clicks'] = 0
             await send_preview_message(update, context, schwester_code)
+            
         elif action == "prices":
+            await send_or_update_admin_log(context, user, f"Schaut sich Preise an ({schwester_code.upper()})")
             image_paths = get_media_files(schwester_code, "preis"); image_paths.sort()
             if not image_paths:
                 await context.bot.send_message(chat_id=chat_id, text="Ups! Ich konnte gerade keine passenden Inhalte finden...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="main_menu")]])); return
@@ -407,6 +423,17 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             except error.TelegramError:
                 pass
             
+            stats = load_stats()
+            user_log = stats.get("admin_logs", {}).get(str(user.id))
+            if user_log and "message_id" in user_log:
+                try:
+                    admin_message = await context.bot.get_chat_message(chat_id=NOTIFICATION_GROUP_ID, message_id=user_log["message_id"])
+                    if "🚫" not in admin_message.text:
+                        new_text = admin_message.text + "\n\n🚫 `Vorschau-Limit erreicht`"
+                        await context.bot.edit_message_text(chat_id=NOTIFICATION_GROUP_ID, message_id=user_log["message_id"], text=new_text, parse_mode='Markdown')
+                except Exception as e:
+                    logger.warning(f"Konnte Admin-Nachricht für Limit-Speicherung nicht bearbeiten: {e}")
+
             limit_text = "Du hast das Vorschau-Limit von 25 Bildern erreicht. 😥\n\nBitte wähle nun ein Paket aus, um die volle Auswahl zu sehen."
             limit_keyboard = [
                 [InlineKeyboardButton("Kleine Schwester (Preise)", callback_data="select_schwester:ks:prices"), 
@@ -419,7 +446,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             return
             
         _, schwester_code = data.split(":")
-        await send_or_update_admin_log(context, user, f"Nächstes Bild ({schwester_code.upper()})")
+        await send_or_update_admin_log(context, user, f"Nächstes Bild ({preview_clicks}/{PREVIEW_LIMIT})")
         image_paths = get_media_files(schwester_code, "vorschau"); image_paths.sort()
         index_key = f'preview_index_{schwester_code}'; current_index = context.user_data.get(index_key, 0); next_index = current_index + 1
         if next_index >= len(image_paths): next_index = 0
@@ -440,12 +467,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await cleanup_previous_messages(chat_id, context);
         try: await query.message.delete()
         except Exception: pass
-        _, media_type, amount_str = data.split(":"); amount = int(amount_str); price = PRICES[media_type][amount]; text = f"Du hast das Paket **{amount} {media_type.capitalize()}** für **{price}€** ausgewählt.\n\nWie möchtest du bezahlen?"
+        _, media_type, amount_str = data.split(":"); amount = int(amount_str); price = PRICES[media_type][amount]
+        await send_or_update_admin_log(context, user, f"Paket ausgewählt: {amount} {media_type} für {price}€")
+        text = f"Du hast das Paket **{amount} {media_type.capitalize()}** für **{price}€** ausgewählt.\n\nWie möchtest du bezahlen?"
         keyboard = [[InlineKeyboardButton(" PayPal", callback_data=f"pay_paypal:{media_type}:{amount}")], [InlineKeyboardButton(" Gutschein", callback_data=f"pay_voucher:{media_type}:{amount}")], [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zu den Preisen", callback_data="show_price_options")]]
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
     elif data.startswith(("pay_paypal:", "pay_voucher:", "pay_crypto:", "show_wallet:", "voucher_provider:")):
-        try: await query.edit_message_text(text="⏳"); await asyncio.sleep(2)
+        try: await query.edit_message_text(text="⏳"); await asyncio.sleep(1)
         except Exception: pass
         parts = data.split(":")
         if data.startswith("pay_paypal:"):
