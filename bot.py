@@ -112,7 +112,7 @@ async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: Use
     # --- Construct the message text ---
     username_str = f"@{user.username}" if user.username else "N/A"
     discount_emoji = "💸" if user_data.get("discount_sent") else ""
-    
+
     first_start_str = "N/A"
     if user_data.get("first_start"):
         first_start_dt = datetime.fromisoformat(user_data["first_start"])
@@ -148,7 +148,6 @@ async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: Use
     except error.BadRequest as e:
         if "message to edit not found" in str(e):
             logger.warning(f"Admin log for user {user.id} not found (ID: {log_message_id}). Sending a new one.")
-            # The message is confirmed to be gone. Send a new one and update the ID.
             try:
                 sent_message = await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=final_text, parse_mode='Markdown')
                 admin_logs.setdefault(user_id_str, {})["message_id"] = sent_message.message_id
@@ -157,11 +156,8 @@ async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: Use
             except Exception as e_new:
                 logger.error(f"Failed to send replacement admin log for user {user.id}: {e_new}")
         else:
-            # Another type of BadRequest, log it but don't delete.
             logger.error(f"BadRequest on admin log for user {user.id}: {e}")
     except error.TelegramError as e:
-        # Catch other potential errors (e.g., network issues) but DO NOT delete the message.
-        # The next update will likely succeed.
         if 'message is not modified' not in str(e):
             logger.warning(f"Temporary error updating admin log for user {user.id} (ID: {log_message_id}): {e}")
 
@@ -440,7 +436,20 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         preview_clicks = user_data.get("preview_clicks", 0)
 
         if preview_clicks >= 25:
-            await query.answer("Du hast dein Vorschau-Limit von 25 Klicks erreicht.", show_alert=True)
+            await query.answer("Vorschau-Limit erreicht!", show_alert=True)
+            
+            # Remove the old preview message and replace it with the limit info
+            await cleanup_previous_messages(chat_id, context)
+            _, schwester_code = data.split(":")
+            
+            limit_text = "Du hast dein Vorschau-Limit von 25 Klicks erreicht. Sieh dir jetzt die Preise an, um mehr zu sehen!"
+            limit_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"🛍️ Preise für {schwester_code.upper()} ansehen", callback_data=f"select_schwester:{schwester_code}:prices")],
+                [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]
+            ])
+            
+            msg = await context.bot.send_message(chat_id, text=limit_text, reply_markup=limit_keyboard)
+            context.user_data["messages_to_delete"] = [msg.message_id]
             return
 
         user_data["preview_clicks"] = preview_clicks + 1
