@@ -60,6 +60,58 @@ def load_stats():
 def save_stats(stats):
     with open(STATS_FILE, "w") as f: json.dump(stats, f, indent=4)
 
+# NEU: Inaktivitäts-Rabatt Job-Funktionen
+async def send_inactivity_discount(context: ContextTypes.DEFAULT_TYPE):
+    """Sendet eine Rabattnachricht an einen inaktiven Nutzer."""
+    job = context.job
+    user_id = job.user_id
+    stats = load_stats()
+    user_id_str = str(user_id)
+
+    # Prüfen, ob der Nutzer existiert und der Rabatt noch nicht gesendet wurde
+    if user_id_str in stats.get("users", {}) and not stats["users"][user_id_str].get("discount_sent", False):
+        last_activity_str = stats["users"][user_id_str].get("last_start")
+        if last_activity_str:
+            last_activity_dt = datetime.fromisoformat(last_activity_str)
+            # Sicherheitscheck: Sind wirklich mehr als 5 Stunden vergangen?
+            if datetime.now() - last_activity_dt >= timedelta(hours=5):
+                try:
+                    text = (
+                        "👋 Hey, wir vermissen dich!\n\n"
+                        "Als kleines Dankeschön für dein Interesse schenken wir dir **1€ Rabatt** auf dein nächstes Paket. ✨\n\n"
+                        "Schau doch mal wieder rein!"
+                    )
+                    keyboard = [[InlineKeyboardButton("Zurück zum Bot", callback_data="main_menu")]]
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        reply_markup=InlineKeyboardMarkup(keyboard),
+                        parse_mode='Markdown'
+                    )
+                    stats["users"][user_id_str]["discount_sent"] = True
+                    save_stats(stats)
+                    logger.info(f"Inaktivitäts-Rabatt an Nutzer {user_id} gesendet.")
+                except error.Forbidden:
+                    logger.warning(f"Nutzer {user_id} hat den Bot blockiert. Kein Rabattversand möglich.")
+                except Exception as e:
+                    logger.error(f"Fehler beim Senden des Inaktivitäts-Rabatts an {user_id}: {e}")
+
+def schedule_inactivity_job(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Entfernt alte Jobs und plant einen neuen Inaktivitäts-Job für einen Nutzer."""
+    if str(user_id) == ADMIN_USER_ID: return
+
+    job_name = f"inactivity_discount_{user_id}"
+    current_jobs = context.job_queue.get_jobs_by_name(job_name)
+    for job in current_jobs:
+        job.schedule_removal()
+
+    context.job_queue.run_once(
+        send_inactivity_discount,
+        when=timedelta(hours=5),
+        user_id=user_id,
+        name=job_name
+    )
+
 async def track_event(event_name: str, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     if str(user_id) == ADMIN_USER_ID: return
     stats = load_stats()
@@ -106,7 +158,9 @@ async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: Use
             user_log["base_text"] = base_text
 
         if not base_text:
-            base_text = f"👤 *Nutzer-Aktivität*\n\n*ID:* `{user.id}`\n*Name:* {user.first_name}"
+            # GEÄNDERT: Benutzername hinzugefügt
+            username_str = f"\n*Benutzername:* @{user.username}" if user.username else ""
+            base_text = f"👤 *Nutzer-Aktivität*\n\n*ID:* `{user.id}`\n*Name:* {user.first_name}{username_str}"
             user_log["base_text"] = base_text
 
         final_text = f"{base_text}\n\n`Aktion: {event_text}`".strip() if event_text else base_text
@@ -238,15 +292,20 @@ async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
+    schedule_inactivity_job(context, user.id)  # NEU: Inaktivitäts-Timer bei jeder Aktion zurücksetzen
     status, should_notify = await check_user_status(user.id, context)
     await track_event("start_command", context, user.id)
     if should_notify:
+        # GEÄNDERT: Benutzername zu den Admin-Benachrichtigungen hinzugefügt
+        username_str = f"\n*Benutzername:* @{user.username}" if user.username else ""
+        user_details = f"*ID:* `{user.id}`\n*Name:* {user.first_name}{username_str}"
         if status == "new":
-            message = f"🎉 *Neuer Nutzer gestartet!*\n\n*ID:* `{user.id}`\n*Name:* {user.first_name}"
+            message = f"🎉 *Neuer Nutzer gestartet!*\n\n{user_details}"
             await send_or_update_admin_log(context, user, base_text_override=message)
         elif status == "returning":
-            message = f"🔄 *Wiederkehrender Nutzer!*\n\n*ID:* `{user.id}`\n*Name:* {user.first_name}"
+            message = f"🔄 *Wiederkehrender Nutzer!*\n\n{user_details}"
             await send_or_update_admin_log(context, user, base_text_override=message)
+
     context.user_data.clear(); chat_id = update.effective_chat.id; await cleanup_previous_messages(chat_id, context)
     welcome_text = ( "Herzlich Willkommen! ✨\n\n" "Hier kannst du eine Vorschau meiner Inhalte sehen oder direkt ein Paket auswählen. " "Die gesamte Bedienung erfolgt über die Buttons.")
     keyboard = [[InlineKeyboardButton(" Vorschau", callback_data="show_preview_options")], [InlineKeyboardButton(" Preise & Pakete", callback_data="show_price_options")]]
@@ -262,6 +321,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query; await query.answer(); data = query.data; chat_id = update.effective_chat.id; user = update.effective_user
+    schedule_inactivity_job(context, user.id)  # NEU: Inaktivitäts-Timer bei jeder Aktion zurücksetzen
+    
     if data == "download_vouchers_pdf":
         await query.answer("PDF wird erstellt..."); vouchers = load_vouchers(); pdf = FPDF()
         pdf.add_page(); pdf.set_font("Arial", size=16); pdf.cell(0, 10, "Gutschein Report", ln=True, align='C'); pdf.ln(10)
@@ -328,6 +389,33 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             context.user_data["messages_to_delete"] = [photo_message.message_id, text_message.message_id]
     elif data.startswith("next_preview:"):
         await track_event("next_preview", context, user.id)
+        
+        # NEU: Vorschau-Limit implementieren
+        preview_clicks = context.user_data.get('preview_clicks', 0) + 1
+        context.user_data['preview_clicks'] = preview_clicks
+
+        PREVIEW_LIMIT = 25
+        if preview_clicks > PREVIEW_LIMIT:
+            await query.answer("Vorschau-Limit erreicht!", show_alert=True)
+            await cleanup_previous_messages(chat_id, context)
+            try:
+                await query.delete_message()
+            except error.TelegramError:
+                pass
+            
+            limit_text = "Du hast das Vorschau-Limit von 25 Bildern erreicht. 😥\n\nBitte wähle nun ein Paket aus, um die volle Auswahl zu sehen."
+            limit_keyboard = [
+                [InlineKeyboardButton("Kleine Schwester (Preise)", callback_data="select_schwester:ks:prices"), 
+                 InlineKeyboardButton("Große Schwester (Preise)", callback_data="select_schwester:gs:prices")],
+                [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]
+            ]
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=limit_text,
+                reply_markup=InlineKeyboardMarkup(limit_keyboard)
+            )
+            return
+
         _, schwester_code = data.split(":")
         await send_or_update_admin_log(context, user, f"Nächstes Bild ({schwester_code.upper()})")
         image_paths = get_media_files(schwester_code, "vorschau"); image_paths.sort()
@@ -408,11 +496,26 @@ async def show_vouchers_panel(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if context.user_data.get("awaiting_voucher"):
-        user = update.effective_user; provider = context.user_data.pop("awaiting_voucher"); code = update.message.text
-        vouchers = load_vouchers(); vouchers[provider].append(code); save_vouchers(vouchers)
-        notification_text = (f"📬 *Neuer Gutschein erhalten!*\n\n*Anbieter:* {provider.capitalize()}\n*Code:* `{code}`\n*Von Nutzer:* `{user.id}` ({user.first_name})")
+        user = update.effective_user
+        schedule_inactivity_job(context, user.id)  # NEU: Inaktivitäts-Timer bei jeder Aktion zurücksetzen
+        provider = context.user_data.pop("awaiting_voucher")
+        code = update.message.text
+        vouchers = load_vouchers()
+        vouchers.setdefault(provider, []).append(code)
+        save_vouchers(vouchers)
+
+        # GEÄNDERT: Benutzername zur Admin-Benachrichtigung hinzugefügt
+        username_str = f"\n*Benutzername:* @{user.username}" if user.username else ""
+        user_details = f"*ID:* `{user.id}`\n*Name:* {user.first_name}{username_str}"
+        notification_text = (
+            f"📬 *Neuer Gutschein erhalten!*\n\n"
+            f"*Anbieter:* {provider.capitalize()}\n"
+            f"*Code:* `{code}`\n\n"
+            f"*Von Nutzer:*\n{user_details}"
+        )
         await send_permanent_admin_notification(context, notification_text)
-        await update.message.reply_text("Vielen Dank! Dein Gutschein wurde übermittelt..."); await start(update, context)
+        await update.message.reply_text("Vielen Dank! Dein Gutschein wurde übermittelt...")
+        await start(update, context)
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = str(update.effective_user.id)
@@ -427,7 +530,7 @@ async def add_voucher(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if len(context.args) < 2: await update.message.reply_text("⚠️ Falsches Format:\n`/addvoucher <anbieter> <code...>`", parse_mode='Markdown'); return
     provider = context.args[0].lower()
     if provider not in ["amazon", "paysafe"]: await update.message.reply_text("Fehler: Anbieter muss 'amazon' oder 'paysafe' sein."); return
-    code = " ".join(context.args[1:]); vouchers = load_vouchers(); vouchers[provider].append(code); save_vouchers(vouchers)
+    code = " ".join(context.args[1:]); vouchers = load_vouchers(); vouchers.setdefault(provider, []).append(code); save_vouchers(vouchers)
     await update.message.reply_text(f"✅ Gutschein für **{provider.capitalize()}** hinzugefügt:\n`{code}`", parse_mode='Markdown')
 
 async def set_summary_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
