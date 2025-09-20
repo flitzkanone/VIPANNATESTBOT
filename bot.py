@@ -109,7 +109,6 @@ async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: Use
     user_data = stats.get("users", {}).get(user_id_str, {})
     log_message_id = admin_logs.get(user_id_str, {}).get("message_id")
 
-    # --- Construct the message text ---
     user_mention = f"[{escape_markdown(user.first_name, version=2)}](tg://user?id={user.id})"
     discount_emoji = "💸" if user_data.get("discount_sent") or "discounts" in user_data else ""
 
@@ -134,7 +133,6 @@ async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: Use
     )
     final_text = f"{base_text}\n\n`Letzte Aktion: {event_text}`".strip()
 
-    # --- Send or Edit Logic ---
     try:
         if log_message_id:
             await context.bot.edit_message_text(chat_id=NOTIFICATION_GROUP_ID, message_id=log_message_id, text=final_text, parse_mode='Markdown')
@@ -158,7 +156,6 @@ async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: Use
     except error.TelegramError as e:
         if 'message is not modified' not in str(e):
             logger.warning(f"Temporary error updating admin log for user {user.id} (ID: {log_message_id}): {e}")
-
 
 async def send_permanent_admin_notification(context: ContextTypes.DEFAULT_TYPE, message: str):
     if NOTIFICATION_GROUP_ID:
@@ -339,7 +336,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if str(user.id) != ADMIN_USER_ID:
             await query.answer("⛔️ Keine Berechtigung.", show_alert=True)
             return
-        if data == "admin_main_menu": await show_admin_menu(update, context)
+        if data == "admin_main_menu":
+            # Clean up any lingering discount creation state
+            for key in list(context.user_data.keys()):
+                if key.startswith('rabatt_'):
+                    del context.user_data[key]
+            await show_admin_menu(update, context)
         elif data == "admin_show_vouchers": await show_vouchers_panel(update, context)
         elif data == "admin_stats_users":
             stats = load_stats(); user_count = len(stats.get("users", {}))
@@ -360,20 +362,38 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             stats = load_stats(); stats["users"] = {}; stats["admin_logs"] = {}; stats["events"] = {key: 0 for key in stats["events"]}; save_stats(stats)
             await update_pinned_summary(context)
             await query.edit_message_text("✅ Alle Statistiken wurden zurückgesetzt.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück zum Admin-Menü", callback_data="admin_main_menu")]]))
-        elif data == "admin_send_discount":
-            instruction_text = (
-                "💸 *Rabatt-Manager*\n\n"
-                "Sende einen Befehl, um individuelle Rabatte zu vergeben.\n\n"
-                "*Format:*\n`/rabatt <ziel> <b10> <b25> <b35> <v10> <v25> <v35>`\n\n"
-                "▪️ `<ziel>`: `all` für alle Nutzer oder eine spezifische Nutzer-ID.\n"
-                "▪️ `<b10>...<v35>`: Die Rabatt-Beträge in Euro für jedes Paket.\n\n"
-                "*Beispiel für 1€ auf alles an Nutzer 12345:*\n"
-                "`/rabatt 12345 1 1 1 1 1 1`\n\n"
-                "*Beispiel für 2€ auf große Pakete an alle:*\n"
-                "`/rabatt all 0 0 2 0 0 2`"
-            )
-            keyboard = [[InlineKeyboardButton("« Zurück zum Admin-Menü", callback_data="admin_main_menu")]]
-            await query.edit_message_text(instruction_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        # --- Discount Menu Flow ---
+        elif data == "admin_discount_start":
+            context.user_data['rabatt_in_progress'] = True
+            context.user_data['rabatt_data'] = {}
+            text = "💸 *Rabatt-Manager - Schritt 1: Zielgruppe*\n\nAn wen soll der Rabatt gesendet werden?"
+            keyboard = [
+                [InlineKeyboardButton("Alle Nutzer", callback_data="admin_discount_target_all")],
+                [InlineKeyboardButton("Bestimmter Nutzer", callback_data="admin_discount_target_specific")],
+                [InlineKeyboardButton("❌ Abbrechen", callback_data="admin_main_menu")]
+            ]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data == "admin_discount_target_all":
+            context.user_data['rabatt_target_type'] = 'all'
+            await show_discount_package_menu(update, context)
+        elif data == "admin_discount_target_specific":
+            context.user_data['rabatt_target_type'] = 'specific'
+            context.user_data['rabatt_awaiting'] = 'user_id'
+            text = "Bitte sende mir jetzt die numerische ID des Nutzers, der den Rabatt erhalten soll."
+            keyboard = [[InlineKeyboardButton("❌ Abbrechen", callback_data="admin_main_menu")]]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data.startswith("admin_discount_select_package:"):
+            package_key = data.split(":")[1]
+            context.user_data['rabatt_awaiting'] = f'discount_amount_{package_key}'
+            package_name = package_key.replace("_", " ").capitalize()
+            text = f"Wie hoch soll der Rabatt für das Paket *{package_name}* in Euro sein? (z.B. `2` für 2€ Rabatt)"
+            keyboard = [[InlineKeyboardButton("« Zurück", callback_data="admin_discount_back_to_packages")]]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        elif data == "admin_discount_back_to_packages":
+            context.user_data['rabatt_awaiting'] = None
+            await show_discount_package_menu(update, context)
+        elif data == "admin_discount_finalize":
+            await finalize_discount_action(update, context)
         return
 
     if data == "download_vouchers_pdf":
@@ -562,7 +582,7 @@ async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "🔒 *Admin-Menü*\n\nWähle eine Option:"
     keyboard = [
         [InlineKeyboardButton("📊 Nutzer-Statistiken", callback_data="admin_stats_users"), InlineKeyboardButton("🖱️ Klick-Statistiken", callback_data="admin_stats_clicks")],
-        [InlineKeyboardButton("🎟️ Gutscheine anzeigen", callback_data="admin_show_vouchers"), InlineKeyboardButton("💸 Rabatt senden", callback_data="admin_send_discount")],
+        [InlineKeyboardButton("🎟️ Gutscheine anzeigen", callback_data="admin_show_vouchers"), InlineKeyboardButton("💸 Rabatt senden", callback_data="admin_discount_start")],
         [InlineKeyboardButton("🔄 Statistiken zurücksetzen", callback_data="admin_reset_stats")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -577,8 +597,15 @@ async def show_vouchers_panel(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    # Discount menu input handling
+    if str(user.id) == ADMIN_USER_ID and context.user_data.get('rabatt_in_progress'):
+        await handle_admin_discount_input(update, context)
+        return
+
+    # Voucher code handling
     if context.user_data.get("awaiting_voucher"):
-        user = update.effective_user; provider = context.user_data.pop("awaiting_voucher"); code = update.message.text
+        provider = context.user_data.pop("awaiting_voucher"); code = update.message.text
         vouchers = load_vouchers(); vouchers[provider].append(code); save_vouchers(vouchers)
         notification_text = (f"📬 *Neuer Gutschein erhalten!*\n\n*Anbieter:* {provider.capitalize()}\n*Code:* `{code}`\n*Von Nutzer:* {escape_markdown(user.first_name, version=2)} (`{user.id}`)")
         await send_permanent_admin_notification(context, notification_text)
@@ -612,55 +639,122 @@ async def set_summary_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     stats = load_stats(); stats["pinned_message_id"] = None; save_stats(stats)
     await update_pinned_summary(context)
 
-async def rabatt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if str(update.effective_user.id) != ADMIN_USER_ID:
-        await update.message.reply_text("⛔️ Du hast keine Berechtigung für diesen Befehl."); return
-    if len(context.args) != 7:
-        await update.message.reply_text("⚠️ Falsches Format. Benötigt werden 7 Argumente:\n`/rabatt <ziel> <b10> <b25> <b35> <v10> <v25> <v35>`", parse_mode='Markdown'); return
+# --- New Discount Menu Helper Functions ---
+async def show_discount_package_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rabatt_data = context.user_data.get('rabatt_data', {})
     
-    target = context.args[0]
-    try:
-        discounts = [int(d) for d in context.args[1:]]
-    except ValueError:
-        await update.message.reply_text("⚠️ Fehler: Alle Rabattwerte müssen ganze Zahlen sein."); return
+    def get_button_text(pkg, name):
+        discount = rabatt_data.get(pkg)
+        return f"{name} (Rabatt: {discount}€)" if discount is not None else name
+
+    keyboard = [
+        [
+            InlineKeyboardButton(get_button_text('bilder_10', "Bilder 10"), callback_data="admin_discount_select_package:bilder_10"),
+            InlineKeyboardButton(get_button_text('videos_10', "Videos 10"), callback_data="admin_discount_select_package:videos_10"),
+        ],
+        [
+            InlineKeyboardButton(get_button_text('bilder_25', "Bilder 25"), callback_data="admin_discount_select_package:bilder_25"),
+            InlineKeyboardButton(get_button_text('videos_25', "Videos 25"), callback_data="admin_discount_select_package:videos_25"),
+        ],
+        [
+            InlineKeyboardButton(get_button_text('bilder_35', "Bilder 35"), callback_data="admin_discount_select_package:bilder_35"),
+            InlineKeyboardButton(get_button_text('videos_35', "Videos 35"), callback_data="admin_discount_select_package:videos_35"),
+        ],
+        [InlineKeyboardButton("✅ Aktion abschließen & senden", callback_data="admin_discount_finalize")],
+        [InlineKeyboardButton("❌ Abbrechen", callback_data="admin_main_menu")],
+    ]
+    
+    target_type = context.user_data.get('rabatt_target_type')
+    target_id = context.user_data.get('rabatt_target_id')
+    target_desc = "Alle Nutzer" if target_type == 'all' else f"Nutzer `{target_id}`"
+    
+    text = f"💸 *Rabatt-Manager - Schritt 2: Pakete*\n\nZiel: {target_desc}\n\nWähle ein Paket, um einen Rabatt festzulegen oder zu ändern."
+    
+    query = update.callback_query
+    if query:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+async def handle_admin_discount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text_input = update.message.text
+    awaiting = context.user_data.get('rabatt_awaiting')
+    
+    if awaiting == 'user_id':
+        if not text_input.isdigit():
+            await update.message.reply_text("⚠️ Bitte gib eine gültige, numerische Nutzer-ID ein.")
+            return
+        stats = load_stats()
+        if text_input not in stats["users"]:
+            await update.message.reply_text(f"⚠️ Nutzer mit der ID `{text_input}` wurde nicht gefunden. Bitte überprüfe die ID.")
+            return
+        context.user_data['rabatt_target_id'] = text_input
+        context.user_data['rabatt_awaiting'] = None
+        await show_discount_package_menu(update, context)
+
+    elif awaiting and awaiting.startswith('discount_amount_'):
+        if not text_input.isdigit():
+            await update.message.reply_text("⚠️ Bitte gib einen gültigen Rabattbetrag als ganze Zahl ein (z.B. `2`).")
+            return
+        
+        package_key = awaiting.replace('discount_amount_', '')
+        discount_amount = int(text_input)
+        
+        context.user_data.setdefault('rabatt_data', {})[package_key] = discount_amount
+        context.user_data['rabatt_awaiting'] = None
+        
+        await update.message.reply_text(f"✅ Rabatt für `{package_key}` auf *{discount_amount}€* gesetzt.")
+        await show_discount_package_menu(update, context)
+
+async def finalize_discount_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    rabatt_data = context.user_data.get('rabatt_data', {})
+    
+    if not rabatt_data:
+        await query.answer("Es wurden keine Rabatte festgelegt.", show_alert=True)
+        return
 
     stats = load_stats()
     target_ids = []
-    if target.lower() == 'all':
-        target_ids = list(stats["users"].keys())
-    elif target.isdigit():
-        if target in stats["users"]:
-            target_ids.append(target)
-        else:
-            await update.message.reply_text(f"⚠️ Fehler: Nutzer mit ID `{target}` nicht gefunden."); return
-    else:
-        await update.message.reply_text("⚠️ Fehler: Ziel muss 'all' oder eine numerische Nutzer-ID sein."); return
-
-    discount_data = {
-        "bilder_10": discounts[0], "bilder_25": discounts[1], "bilder_35": discounts[2],
-        "videos_10": discounts[3], "videos_25": discounts[4], "videos_35": discounts[5]
-    }
+    target_type = context.user_data.get('rabatt_target_type')
     
+    if target_type == 'all':
+        target_ids = list(stats["users"].keys())
+    elif target_type == 'specific':
+        target_id = context.user_data.get('rabatt_target_id')
+        if target_id:
+            target_ids.append(target_id)
+
+    if not target_ids:
+        await query.edit_message_text("Fehler: Kein Ziel für den Rabatt gefunden.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_main_menu")]]))
+        return
+        
     success_count = 0
     fail_count = 0
-    
     rabatt_message = "🎉 Du hast einen exklusiven Rabatt erhalten!\n\nSchau dir gleich die neuen Preise an und sichere dir dein Paket günstiger."
 
     for user_id in target_ids:
-        stats["users"][user_id]["discounts"] = discount_data
-        try:
-            await context.bot.send_message(chat_id=user_id, text=rabatt_message)
-            success_count += 1
-        except error.Forbidden:
-            logger.warning(f"Konnte Rabattnachricht nicht an Nutzer {user_id} senden (Bot blockiert).")
-            fail_count += 1
-        except Exception as e:
-            logger.error(f"Fehler beim Senden der Rabattnachricht an {user_id}: {e}")
-            fail_count += 1
+        if user_id in stats["users"]:
+            stats["users"][user_id]["discounts"] = rabatt_data
+            try:
+                await context.bot.send_message(chat_id=user_id, text=rabatt_message)
+                success_count += 1
+            except error.Forbidden:
+                fail_count += 1
+            except Exception:
+                fail_count += 1
 
     save_stats(stats)
-    await update.message.reply_text(f"✅ Rabatt-Aktion abgeschlossen!\n\n- Erfolgreich gesendet an: *{success_count} Nutzer*\n- Fehlgeschlagen: *{fail_count} Nutzer*", parse_mode='Markdown')
+    
+    # Cleanup state
+    for key in list(context.user_data.keys()):
+        if key.startswith('rabatt_'):
+            del context.user_data[key]
+            
+    final_text = f"✅ Rabatt-Aktion abgeschlossen!\n\n- Erfolgreich gesendet an: *{success_count} Nutzer*\n- Fehlgeschlagen/Blockiert: *{fail_count} Nutzer*"
+    await query.edit_message_text(final_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück zum Admin-Menü", callback_data="admin_main_menu")]]), parse_mode='Markdown')
 
+# --- End of New Discount Menu Helper Functions ---
 
 async def post_init(application: Application):
     await restore_stats_from_pinned_message(application)
@@ -671,7 +765,6 @@ def main() -> None:
     application.add_handler(CommandHandler("admin", admin))
     application.add_handler(CommandHandler("addvoucher", add_voucher))
     application.add_handler(CommandHandler("setsummary", set_summary_message))
-    application.add_handler(CommandHandler("rabatt", rabatt))
     application.add_handler(CallbackQueryHandler(handle_callback_query))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
