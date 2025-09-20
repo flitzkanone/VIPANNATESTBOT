@@ -99,56 +99,74 @@ async def check_user_status(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     save_stats(stats)
     return "active", False, stats["users"][user_id_str]
 
-async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: User, event_text: str = "", base_text_override: str = None):
-    if NOTIFICATION_GROUP_ID and str(user.id) != ADMIN_USER_ID:
-        user_id_str = str(user.id)
-        stats = load_stats()
-        admin_logs = stats.get("admin_logs", {})
-        user_data = stats.get("users", {}).get(user_id_str, {})
+async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: User, event_text: str = ""):
+    if not NOTIFICATION_GROUP_ID or str(user.id) == ADMIN_USER_ID:
+        return
 
-        log_message_id = admin_logs.get(user_id_str, {}).get("message_id")
+    user_id_str = str(user.id)
+    stats = load_stats()
+    admin_logs = stats.get("admin_logs", {})
+    user_data = stats.get("users", {}).get(user_id_str, {})
+    log_message_id = admin_logs.get(user_id_str, {}).get("message_id")
 
-        if base_text_override:
-            base_text = base_text_override
+    # --- Construct the message text ---
+    username_str = f"@{user.username}" if user.username else "N/A"
+    discount_emoji = "💸" if user_data.get("discount_sent") else ""
+    
+    first_start_str = "N/A"
+    if user_data.get("first_start"):
+        first_start_dt = datetime.fromisoformat(user_data["first_start"])
+        first_start_str = first_start_dt.strftime('%Y-%m-%d %H:%M')
+
+    viewed_sisters_list = user_data.get("viewed_sisters", [])
+    viewed_sisters_str = f"(Gesehen: {', '.join(s.upper() for s in sorted(viewed_sisters_list))})" if viewed_sisters_list else ""
+    preview_clicks = user_data.get("preview_clicks", 0)
+
+    payments = user_data.get("payments_initiated", [])
+    payments_str = "\n".join(f"   • {p}" for p in payments) if payments else "   • Keine"
+
+    base_text = (
+        f"👤 *Nutzer-Aktivität* {discount_emoji}\n\n"
+        f"*ID:* `{user.id}`\n"
+        f"*Name:* {escape_markdown(user.first_name, version=2)}\n"
+        f"*Username:* `{username_str}`\n"
+        f"*Erster Start:* `{first_start_str}`\n\n"
+        f"🖼️ *Vorschau-Klicks:* {preview_clicks}/25 {viewed_sisters_str}\n\n"
+        f"💰 *Bezahlversuche*\n{payments_str}"
+    )
+    final_text = f"{base_text}\n\n`Letzte Aktion: {event_text}`".strip()
+
+    # --- Send or Edit Logic ---
+    try:
+        if log_message_id:
+            await context.bot.edit_message_text(chat_id=NOTIFICATION_GROUP_ID, message_id=log_message_id, text=final_text, parse_mode='Markdown')
         else:
-            username_str = f"@{user.username}" if user.username else "N/A"
-            discount_emoji = "💸" if user_data.get("discount_sent") else ""
-            viewed_sisters_list = user_data.get("viewed_sisters", [])
-            viewed_sisters_str = f"(Gesehen: {', '.join(s.upper() for s in sorted(viewed_sisters_list))})" if viewed_sisters_list else ""
-            preview_clicks = user_data.get("preview_clicks", 0)
+            # If no message ID is stored, send a new one
+            sent_message = await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=final_text, parse_mode='Markdown')
+            admin_logs.setdefault(user_id_str, {})["message_id"] = sent_message.message_id
+            stats["admin_logs"] = admin_logs
+            save_stats(stats)
+    except error.TelegramError as e:
+        if 'message is not modified' in str(e):
+            return # This is not an error, just no change needed.
+        
+        logger.warning(f"Failed to edit admin log for user {user.id} (Msg ID: {log_message_id}): {e}. Attempting to replace.")
+        
+        # Proactively delete the old (now invalid) message to prevent duplicates
+        if log_message_id:
+            try:
+                await context.bot.delete_message(chat_id=NOTIFICATION_GROUP_ID, message_id=log_message_id)
+            except error.TelegramError:
+                pass # The message might already be gone, which is fine.
 
-            payments = user_data.get("payments_initiated", [])
-            payments_str = "\n".join(f"   • {p}" for p in payments) if payments else "   • Keine"
-
-            base_text = (
-                f"👤 *Nutzer-Aktivität* {discount_emoji}\n\n"
-                f"*ID:* `{user.id}`\n"
-                f"*Name:* {escape_markdown(user.first_name, version=2)}\n"
-                f"*Username:* `{username_str}`\n\n"
-                f"🖼️ *Vorschau-Klicks:* {preview_clicks}/25 {viewed_sisters_str}\n\n"
-                f"💰 *Bezahlversuche*\n{payments_str}"
-            )
-
-        final_text = f"{base_text}\n\n`Letzte Aktion: {event_text}`".strip() if event_text else base_text
-
+        # Send a brand new message and save its ID
         try:
-            if log_message_id:
-                await context.bot.edit_message_text(chat_id=NOTIFICATION_GROUP_ID, message_id=log_message_id, text=final_text, parse_mode='Markdown')
-            else:
-                sent_message = await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=final_text, parse_mode='Markdown')
-                admin_logs.setdefault(user_id_str, {})["message_id"] = sent_message.message_id
-                stats["admin_logs"] = admin_logs
-                save_stats(stats)
-        except error.TelegramError as e:
-            logger.error(f"Konnte Admin-Log nicht senden/bearbeiten für user {user.id}: {e}")
-            if 'message is not modified' not in str(e):
-                try: # Attempt to resend if editing failed for other reasons
-                    sent_message = await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=final_text, parse_mode='Markdown')
-                    admin_logs.setdefault(user_id_str, {})["message_id"] = sent_message.message_id
-                    stats["admin_logs"] = admin_logs
-                    save_stats(stats)
-                except Exception as e_new:
-                    logger.error(f"Konnte Admin-Log auch nicht neu senden für user {user.id}: {e_new}")
+            sent_message = await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=final_text, parse_mode='Markdown')
+            admin_logs.setdefault(user_id_str, {})["message_id"] = sent_message.message_id
+            stats["admin_logs"] = admin_logs
+            save_stats(stats)
+        except Exception as e_new:
+            logger.error(f"Failed to send replacement admin log for user {user.id}: {e_new}")
 
 
 async def send_permanent_admin_notification(context: ContextTypes.DEFAULT_TYPE, message: str):
@@ -403,7 +421,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             save_stats(stats)
 
         await track_event(f"{action}_{schwester_code}", context, user.id)
-        await send_or_update_admin_log(context, user, f"Schaut sich {action} von {schwester_code.upper()} an")
+        await send_or_update_admin_log(context, user, event_text=f"Schaut sich {action} von {schwester_code.upper()} an")
 
         if action == "preview":
             await send_preview_message(update, context, schwester_code)
@@ -420,7 +438,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             context.user_data["messages_to_delete"] = [photo_message.message_id, text_message.message_id]
 
     elif data.startswith("next_preview:"):
-        # This is the corrected block: NO message deletion here.
         stats = load_stats()
         user_data = stats.get("users", {}).get(str(user.id), {})
         preview_clicks = user_data.get("preview_clicks", 0)
@@ -435,13 +452,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
         await track_event("next_preview", context, user.id)
         _, schwester_code = data.split(":")
-        await send_or_update_admin_log(context, user, f"Nächstes Bild ({schwester_code.upper()})")
+        await send_or_update_admin_log(context, user, event_text=f"Nächstes Bild ({schwester_code.upper()})")
 
         image_paths = get_media_files(schwester_code, "vorschau"); image_paths.sort()
         index_key = f'preview_index_{schwester_code}'; current_index = context.user_data.get(index_key, 0)
         next_index = (current_index + 1) % len(image_paths) if image_paths else 0
         context.user_data[index_key] = next_index
-        
+
         if not image_paths: return
 
         image_to_show_path = image_paths[next_index]
@@ -459,7 +476,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await cleanup_previous_messages(chat_id, context)
         try: await query.message.delete()
         except error.TelegramError: pass
-        
+
         await track_event("package_selected", context, user.id)
         _, media_type, amount_str = data.split(":"); amount = int(amount_str);
         price = PRICES[media_type][amount];
@@ -490,7 +507,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 if payment_info not in user_data.get("payments_initiated", []):
                     user_data.setdefault("payments_initiated", []).append(payment_info)
                     save_stats(stats)
-            await send_or_update_admin_log(context, user, f"Bezahlmethode '{payment_method}' für {price_val}€ gewählt")
+            await send_or_update_admin_log(context, user, event_text=f"Bezahlmethode '{payment_method}' für {price_val}€ gewählt")
 
         if data.startswith("pay_paypal:"):
             await track_event("payment_paypal", context, user.id); await update_payment_log("PayPal", price)
@@ -542,7 +559,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         vouchers = load_vouchers(); vouchers[provider].append(code); save_vouchers(vouchers)
         notification_text = (f"📬 *Neuer Gutschein erhalten!*\n\n*Anbieter:* {provider.capitalize()}\n*Code:* `{code}`\n*Von Nutzer:* {escape_markdown(user.first_name, version=2)} (`{user.id}`)")
         await send_permanent_admin_notification(context, notification_text)
-        await send_or_update_admin_log(context, user, f"Gutschein '{provider}' eingereicht")
+        await send_or_update_admin_log(context, user, event_text=f"Gutschein '{provider}' eingereicht")
         await update.message.reply_text("Vielen Dank! Dein Gutschein wurde übermittelt und wird nun geprüft. Ich melde mich bei dir.");
         await asyncio.sleep(2)
         await start(update, context)
