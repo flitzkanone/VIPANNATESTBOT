@@ -39,7 +39,8 @@ MEDIA_DIR = "image"
 
 admin_notification_ids = {}
 
-logging.basicConfig(format="%(asctime_s) - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+# KORRIGIERT: Tippfehler von 'asctime_s' zu 'asctime'
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Hilfsfunktionen ---
@@ -157,7 +158,6 @@ async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: Use
             base_text = base_text_override
             user_log["base_text"] = base_text
         
-        # GEÄNDERT: Benutzername (@-Tag) wird jetzt hier hinzugefügt
         if not base_text:
             username_str = f"\n*Benutzername:* @{user.username}" if user.username else ""
             base_text = f"👤 *Nutzer-Aktivität*\n\n*ID:* `{user.id}`\n*Name:* {user.first_name}{username_str}"
@@ -199,7 +199,6 @@ async def send_permanent_admin_notification(context: ContextTypes.DEFAULT_TYPE, 
         except Exception as e: logger.error(f"Konnte permanente Benachrichtigung nicht senden: {e}")
 
 async def update_pinned_summary(context: ContextTypes.DEFAULT_TYPE):
-    # Diese Funktion bleibt unverändert
     if not NOTIFICATION_GROUP_ID: return
     stats = load_stats()
     user_count = len(stats.get("users", {}))
@@ -234,7 +233,6 @@ async def update_pinned_summary(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e_new: logger.error(f"Konnte Dashboard nicht erstellen/anpinnen: {e_new}")
 
 async def restore_stats_from_pinned_message(application: Application):
-    # Diese Funktion bleibt unverändert
     if not NOTIFICATION_GROUP_ID:
         logger.info("Keine NOTIFICATION_GROUP_ID gesetzt, Wiederherstellung übersprungen."); return
     logger.info("Versuche, Statistiken wiederherzustellen...")
@@ -263,7 +261,6 @@ async def restore_stats_from_pinned_message(application: Application):
     except Exception as e: logger.error(f"Fehler bei Wiederherstellung: {e}")
 
 def get_media_files(schwester_code: str, media_type: str) -> list:
-    # Diese Funktion bleibt unverändert
     matching_files = []; target_prefix = f"{schwester_code.lower()}_{media_type.lower()}"
     if not os.path.isdir(MEDIA_DIR):
         logger.error(f"Media-Verzeichnis '{MEDIA_DIR}' nicht gefunden!"); return []
@@ -273,7 +270,6 @@ def get_media_files(schwester_code: str, media_type: str) -> list:
     return matching_files
 
 async def cleanup_previous_messages(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    # Diese Funktion bleibt unverändert
     if "messages_to_delete" in context.user_data:
         for msg_id in context.user_data["messages_to_delete"]:
             try: await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
@@ -281,7 +277,6 @@ async def cleanup_previous_messages(chat_id: int, context: ContextTypes.DEFAULT_
         del context.user_data["messages_to_delete"]
 
 async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYPE, schwester_code: str):
-    # Diese Funktion bleibt unverändert
     chat_id = update.effective_chat.id; image_paths = get_media_files(schwester_code, "vorschau"); image_paths.sort()
     if not image_paths:
         await context.bot.send_message(chat_id=chat_id, text="Ups! Ich konnte gerade keine passenden Inhalte finden...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="main_menu")]])); return
@@ -298,14 +293,12 @@ async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYP
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     
-    # NEU: Rabatt-Check wird hier aufgerufen
     await check_and_send_inactivity_discount(context, user)
 
     status, should_notify = await check_user_status(user.id, context)
     await track_event("start_command", context, user.id)
 
     if should_notify:
-        # GEÄNDERT: Benutzername wird jetzt in send_or_update_admin_log hinzugefügt
         if status == "new":
             message = f"🎉 *Neuer Nutzer gestartet!*\n\n*ID:* `{user.id}`\n*Name:* {user.first_name}"
             username_str = f"\n*Benutzername:* @{user.username}" if user.username else ""
@@ -330,10 +323,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query; await query.answer(); data = query.data; chat_id = update.effective_chat.id; user = update.effective_user
-    # ENTFERNT: Kein Job-Scheduling mehr bei jeder Aktion
     
     if data == "download_vouchers_pdf":
-        # ... (unverändert)
         await query.answer("PDF wird erstellt..."); vouchers = load_vouchers(); pdf = FPDF()
         pdf.add_page(); pdf.set_font("Arial", size=16); pdf.cell(0, 10, "Gutschein Report", ln=True, align='C'); pdf.ln(10)
         pdf.set_font("Arial", 'B', size=14); pdf.cell(0, 10, "Amazon Gutscheine", ln=True); pdf.set_font("Arial", size=12)
@@ -354,7 +345,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception: pass
     if data == "main_menu": await start(update, context)
     elif data == "admin_main_menu": await show_admin_menu(update, context)
-    # ... (restlicher Admin-Teil unverändert)
     elif data == "admin_show_vouchers": await show_vouchers_panel(update, context)
     elif data == "admin_stats_users":
         stats = load_stats(); user_count = len(stats.get("users", {}))
@@ -389,7 +379,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await track_event(f"{action}_{schwester_code}", context, user.id)
         await send_or_update_admin_log(context, user, f"Schaut sich {action} von {schwester_code.upper()} an")
         if action == "preview":
-            # GEÄNDERT: Vorschau-Zähler für neuen Durchgang zurücksetzen
             context.user_data['preview_clicks'] = 0
             await send_preview_message(update, context, schwester_code)
         elif action == "prices":
@@ -405,7 +394,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             context.user_data["messages_to_delete"] = [photo_message.message_id, text_message.message_id]
 
     elif data.startswith("next_preview:"):
-        # GEÄNDERT: Vorschau-Limit Logik
         await track_event("next_preview", context, user.id)
         preview_clicks = context.user_data.get('preview_clicks', 0) + 1
         context.user_data['preview_clicks'] = preview_clicks
@@ -448,7 +436,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await send_preview_message(update, context, schwester_code)
 
     elif data.startswith("select_package:"):
-        # ... (unverändert)
         await track_event("package_selected", context, user.id)
         await cleanup_previous_messages(chat_id, context);
         try: await query.message.delete()
@@ -458,7 +445,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
     elif data.startswith(("pay_paypal:", "pay_voucher:", "pay_crypto:", "show_wallet:", "voucher_provider:")):
-        # GEÄNDERT: Krypto-Text wurde angepasst
         try: await query.edit_message_text(text="⏳"); await asyncio.sleep(2)
         except Exception: pass
         parts = data.split(":")
@@ -499,7 +485,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Diese Funktion bleibt unverändert
     text = "🔒 *Admin-Menü*\n\nWähle eine Option:"
     keyboard = [[InlineKeyboardButton("📊 Nutzer-Statistiken", callback_data="admin_stats_users")], [InlineKeyboardButton("🖱️ Klick-Statistiken", callback_data="admin_stats_clicks")], [InlineKeyboardButton("🎟️ Gutscheine anzeigen", callback_data="admin_show_vouchers")], [InlineKeyboardButton("🔄 Statistiken zurücksetzen", callback_data="admin_reset_stats")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -507,7 +492,6 @@ async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else: await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def show_vouchers_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Diese Funktion bleibt unverändert
     vouchers = load_vouchers(); amazon_codes = "\n".join([f"- `{code}`" for code in vouchers.get("amazon", [])]) or "Keine"; paysafe_codes = "\n".join([f"- `{code}`" for code in vouchers.get("paysafe", [])]) or "Keine"
     text = (f"*Eingelöste Gutscheine*\n\n*Amazon:*\n{amazon_codes}\n\n*Paysafe:*\n{paysafe_codes}")
     keyboard = [[InlineKeyboardButton("📄 Vouchers als PDF laden", callback_data="download_vouchers_pdf")], [InlineKeyboardButton("« Zurück zum Admin-Menü", callback_data="admin_main_menu")]]
@@ -517,14 +501,12 @@ async def show_vouchers_panel(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if context.user_data.get("awaiting_voucher"):
         user = update.effective_user
-        # ENTFERNT: Kein Job-Scheduling mehr
         provider = context.user_data.pop("awaiting_voucher")
         code = update.message.text
         vouchers = load_vouchers()
         vouchers.setdefault(provider, []).append(code)
         save_vouchers(vouchers)
         
-        # GEÄNDERT: Benutzername zur Admin-Benachrichtigung hinzugefügt
         username_str = f"\n*Benutzername:* @{user.username}" if user.username else ""
         user_details = f"*ID:* `{user.id}`\n*Name:* {user.first_name}{username_str}"
         notification_text = (
@@ -537,7 +519,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Vielen Dank! Dein Gutschein wurde übermittelt...")
         await start(update, context)
 
-# ... (restliche Admin-Befehle und main-Funktion bleiben unverändert)
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = str(update.effective_user.id)
     if not ADMIN_USER_ID or user_id != ADMIN_USER_ID:
