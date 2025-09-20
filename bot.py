@@ -141,32 +141,29 @@ async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: Use
         if log_message_id:
             await context.bot.edit_message_text(chat_id=NOTIFICATION_GROUP_ID, message_id=log_message_id, text=final_text, parse_mode='Markdown')
         else:
-            # If no message ID is stored, send a new one
             sent_message = await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=final_text, parse_mode='Markdown')
             admin_logs.setdefault(user_id_str, {})["message_id"] = sent_message.message_id
             stats["admin_logs"] = admin_logs
             save_stats(stats)
-    except error.TelegramError as e:
-        if 'message is not modified' in str(e):
-            return # This is not an error, just no change needed.
-        
-        logger.warning(f"Failed to edit admin log for user {user.id} (Msg ID: {log_message_id}): {e}. Attempting to replace.")
-        
-        # Proactively delete the old (now invalid) message to prevent duplicates
-        if log_message_id:
+    except error.BadRequest as e:
+        if "message to edit not found" in str(e):
+            logger.warning(f"Admin log for user {user.id} not found (ID: {log_message_id}). Sending a new one.")
+            # The message is confirmed to be gone. Send a new one and update the ID.
             try:
-                await context.bot.delete_message(chat_id=NOTIFICATION_GROUP_ID, message_id=log_message_id)
-            except error.TelegramError:
-                pass # The message might already be gone, which is fine.
-
-        # Send a brand new message and save its ID
-        try:
-            sent_message = await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=final_text, parse_mode='Markdown')
-            admin_logs.setdefault(user_id_str, {})["message_id"] = sent_message.message_id
-            stats["admin_logs"] = admin_logs
-            save_stats(stats)
-        except Exception as e_new:
-            logger.error(f"Failed to send replacement admin log for user {user.id}: {e_new}")
+                sent_message = await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=final_text, parse_mode='Markdown')
+                admin_logs.setdefault(user_id_str, {})["message_id"] = sent_message.message_id
+                stats["admin_logs"] = admin_logs
+                save_stats(stats)
+            except Exception as e_new:
+                logger.error(f"Failed to send replacement admin log for user {user.id}: {e_new}")
+        else:
+            # Another type of BadRequest, log it but don't delete.
+            logger.error(f"BadRequest on admin log for user {user.id}: {e}")
+    except error.TelegramError as e:
+        # Catch other potential errors (e.g., network issues) but DO NOT delete the message.
+        # The next update will likely succeed.
+        if 'message is not modified' not in str(e):
+            logger.warning(f"Temporary error updating admin log for user {user.id} (ID: {log_message_id}): {e}")
 
 
 async def send_permanent_admin_notification(context: ContextTypes.DEFAULT_TYPE, message: str):
