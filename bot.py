@@ -343,8 +343,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
              if 'admin_awaiting_input' in context.user_data: del context.user_data['admin_awaiting_input']
 
         if data == "admin_main_menu":
-            for key in list(context.user_data.keys()):
-                if key.startswith('rabatt_') or key.startswith('broadcast_'): del context.user_data[key]
             await show_admin_menu(update, context)
         elif data == "admin_show_vouchers": await show_vouchers_panel(update, context)
         elif data == "admin_stats_users":
@@ -367,19 +365,19 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         # --- Discount Flow ---
         elif data == "admin_discount_start":
             context.user_data['rabatt_in_progress'] = True; context.user_data['rabatt_data'] = {}
-            text = "💸 *Massen-Rabatt - Schritt 1: Zielgruppe*\n\nAn wen soll der Rabatt gesendet werden?"; keyboard = [[InlineKeyboardButton("Alle Nutzer", callback_data="admin_discount_target_all")], [InlineKeyboardButton("Bestimmter Nutzer", callback_data="admin_discount_target_specific")], [InlineKeyboardButton("❌ Abbrechen", callback_data="admin_main_menu")]]
+            text = "💸 *Rabatt senden - Schritt 1: Zielgruppe*\n\nAn wen soll der Rabatt gesendet werden?"; keyboard = [[InlineKeyboardButton("Alle Nutzer", callback_data="admin_discount_target_all")], [InlineKeyboardButton("Bestimmter Nutzer", callback_data="admin_discount_target_specific")], [InlineKeyboardButton("❌ Abbrechen", callback_data="admin_user_management")]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         elif data == "admin_discount_target_all": context.user_data['rabatt_target_type'] = 'all'; await show_discount_package_menu(update, context)
         elif data == "admin_discount_target_specific":
             context.user_data['rabatt_target_type'] = 'specific'; context.user_data['rabatt_awaiting'] = 'user_id'
-            text = "Bitte sende mir jetzt die numerische ID des Nutzers, der den Rabatt erhalten soll."; keyboard = [[InlineKeyboardButton("❌ Abbrechen", callback_data="admin_main_menu")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+            text = "Bitte sende mir jetzt die numerische ID des Nutzers, der den Rabatt erhalten soll."; keyboard = [[InlineKeyboardButton("❌ Abbrechen", callback_data="admin_user_management")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         elif data.startswith("admin_discount_select_package:"):
             package_key = data.split(":")[1]; context.user_data['rabatt_awaiting'] = f'discount_amount_{package_key}'; package_name = package_key.replace("_", " ").capitalize()
             text = f"Wie hoch soll der Rabatt für das Paket *{package_name}* in Euro sein? (z.B. `2` für 2€ Rabatt)"; keyboard = [[InlineKeyboardButton("« Zurück", callback_data="admin_discount_back_to_packages")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         elif data == "admin_discount_back_to_packages": context.user_data['rabatt_awaiting'] = None; await show_discount_package_menu(update, context)
         elif data == "admin_discount_finalize": await finalize_discount_action(update, context)
         
-        # --- NEU: Broadcast Flow ---
+        # --- Broadcast Flow ---
         elif data == "admin_broadcast_start":
             context.user_data['admin_awaiting_input'] = 'broadcast_message'
             text = "📢 Bitte sende mir jetzt die Nachricht, die an alle Nutzer gesendet werden soll."
@@ -387,10 +385,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         elif data == "confirm_broadcast": await do_broadcast(update, context)
         elif data == "cancel_broadcast":
-            del context.user_data['broadcast_message']
+            if 'broadcast_message' in context.user_data: del context.user_data['broadcast_message']
             await query.edit_message_text("✅ Broadcast abgebrochen.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück zum Admin-Menü", callback_data="admin_main_menu")]]))
 
-        # --- NEU: User Management Flow ---
+        # --- User Management Flow ---
         elif data == "admin_user_management": await show_user_management_menu(update, context)
         elif data == "admin_ban_user":
             context.user_data['admin_awaiting_input'] = 'ban_user_id'
@@ -402,11 +400,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             text = "✅ Bitte sende mir die numerische ID des Nutzers, der entsperrt werden soll."
             keyboard = [[InlineKeyboardButton("❌ Abbrechen", callback_data="admin_user_management")]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-        elif data == "admin_givediscount":
-            context.user_data['admin_awaiting_input'] = 'givediscount_details'
-            text = "💸 Bitte sende mir die Details für den individuellen Rabatt im folgenden Format:\n\n`<user_id> <paket> <betrag>`\n\nBeispiel: `12345678 bilder_25 3`"
-            keyboard = [[InlineKeyboardButton("❌ Abbrechen", callback_data="admin_user_management")]]
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         return
 
     if data == "download_vouchers_pdf":
@@ -515,23 +508,29 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await show_admin_menu(update, context)
 
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Cleanup any stale states
+    for key in list(context.user_data.keys()):
+        if key.startswith('rabatt_') or key.startswith('admin_awaiting') or key.startswith('broadcast_'):
+            del context.user_data[key]
+
     text = "🔒 *Admin-Hauptmenü*\n\nWähle eine Aktion:"
     keyboard = [
         [InlineKeyboardButton("📊 Nutzer-Statistiken", callback_data="admin_stats_users"), InlineKeyboardButton("🖱️ Klick-Statistiken", callback_data="admin_stats_clicks")],
-        [InlineKeyboardButton("🎟️ Gutscheine anzeigen", callback_data="admin_show_vouchers"), InlineKeyboardButton("💸 Massen-Rabatt", callback_data="admin_discount_start")],
-        [InlineKeyboardButton("👤 Nutzer verwalten", callback_data="admin_user_management"), InlineKeyboardButton("📢 Broadcast senden", callback_data="admin_broadcast_start")],
-        [InlineKeyboardButton("🔄 Statistiken zurücksetzen", callback_data="admin_reset_stats")]
+        [InlineKeyboardButton("🎟️ Gutscheine anzeigen", callback_data="admin_show_vouchers"), InlineKeyboardButton("📢 Broadcast senden", callback_data="admin_broadcast_start")],
+        [InlineKeyboardButton("👤 Nutzer verwalten", callback_data="admin_user_management"), InlineKeyboardButton("🔄 Statistiken zurücksetzen", callback_data="admin_reset_stats")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    if update.callback_query: await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-    else: await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def show_user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "👤 *Nutzer Verwaltung*\n\nWähle eine Aktion:"
     keyboard = [
         [InlineKeyboardButton("🚫 Nutzer sperren", callback_data="admin_ban_user")],
         [InlineKeyboardButton("✅ Nutzer entsperren", callback_data="admin_unban_user")],
-        [InlineKeyboardButton("💸 Individuellen Rabatt geben", callback_data="admin_givediscount")],
+        [InlineKeyboardButton("💸 Rabatt an Nutzer senden", callback_data="admin_discount_start")],
         [InlineKeyboardButton("« Zurück zum Admin-Menü", callback_data="admin_main_menu")]
     ]
     await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
@@ -551,8 +550,8 @@ async def show_discount_package_menu(update: Update, context: ContextTypes.DEFAU
     def get_button_text(pkg, name):
         discount = rabatt_data.get(pkg)
         return f"{name} (Rabatt: {discount}€)" if discount is not None else name
-    keyboard = [[InlineKeyboardButton(get_button_text('bilder_10', "Bilder 10"), callback_data="admin_discount_select_package:bilder_10"), InlineKeyboardButton(get_button_text('videos_10', "Videos 10"), callback_data="admin_discount_select_package:videos_10")], [InlineKeyboardButton(get_button_text('bilder_25', "Bilder 25"), callback_data="admin_discount_select_package:bilder_25"), InlineKeyboardButton(get_button_text('videos_25', "Videos 25"), callback_data="admin_discount_select_package:videos_25")], [InlineKeyboardButton(get_button_text('bilder_35', "Bilder 35"), callback_data="admin_discount_select_package:bilder_35"), InlineKeyboardButton(get_button_text('videos_35', "Videos 35"), callback_data="admin_discount_select_package:videos_35")], [InlineKeyboardButton("✅ Aktion abschließen & senden", callback_data="admin_discount_finalize")], [InlineKeyboardButton("❌ Abbrechen", callback_data="admin_main_menu")]]
-    target_type = context.user_data.get('rabatt_target_type'); target_id = context.user_data.get('rabatt_target_id'); target_desc = "Alle Nutzer" if target_type == 'all' else f"Nutzer `{target_id}`"; text = f"💸 *Massen-Rabatt - Schritt 2: Pakete*\n\nZiel: {target_desc}\n\nWähle ein Paket, um einen Rabatt festzulegen oder zu ändern."
+    keyboard = [[InlineKeyboardButton(get_button_text('bilder_10', "Bilder 10"), callback_data="admin_discount_select_package:bilder_10"), InlineKeyboardButton(get_button_text('videos_10', "Videos 10"), callback_data="admin_discount_select_package:videos_10")], [InlineKeyboardButton(get_button_text('bilder_25', "Bilder 25"), callback_data="admin_discount_select_package:bilder_25"), InlineKeyboardButton(get_button_text('videos_25', "Videos 25"), callback_data="admin_discount_select_package:videos_25")], [InlineKeyboardButton(get_button_text('bilder_35', "Bilder 35"), callback_data="admin_discount_select_package:bilder_35"), InlineKeyboardButton(get_button_text('videos_35', "Videos 35"), callback_data="admin_discount_select_package:videos_35")], [InlineKeyboardButton("✅ Aktion abschließen & senden", callback_data="admin_discount_finalize")], [InlineKeyboardButton("❌ Abbrechen", callback_data="admin_user_management")]]
+    target_type = context.user_data.get('rabatt_target_type'); target_id = context.user_data.get('rabatt_target_id'); target_desc = "Alle Nutzer" if target_type == 'all' else f"Nutzer `{target_id}`"; text = f"💸 *Rabatt senden - Schritt 2: Pakete*\n\nZiel: {target_desc}\n\nWähle ein Paket, um einen Rabatt festzulegen oder zu ändern."
     query = update.callback_query
     if query: await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     else: await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
@@ -576,7 +575,7 @@ async def finalize_discount_action(update: Update, context: ContextTypes.DEFAULT
     elif target_type == 'specific':
         target_id = context.user_data.get('rabatt_target_id')
         if target_id: target_ids.append(target_id)
-    if not target_ids: await query.edit_message_text("Fehler: Kein Ziel für den Rabatt gefunden.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_main_menu")]])); return
+    if not target_ids: await query.edit_message_text("Fehler: Kein Ziel für den Rabatt gefunden.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_user_management")]])); return
     success_count, fail_count = 0, 0
     rabatt_message = "🎁 **DEIN PERSÖNLICHES ANGEBOT!** 🎁\n\nWir haben dir gerade einen **exklusiven Rabatt** auf ausgewählte Pakete gutgeschrieben!\n\nKlicke hier, um deine neuen, reduzierten Preise zu sehen und direkt zuzuschlagen:"
     keyboard = [[InlineKeyboardButton("💸 Zu meinen exklusiven Preisen 💸", callback_data="show_price_options")]]; reply_markup = InlineKeyboardMarkup(keyboard)
@@ -590,18 +589,20 @@ async def finalize_discount_action(update: Update, context: ContextTypes.DEFAULT
         if key.startswith('rabatt_'): del context.user_data[key]
     final_text = f"✅ Rabatt-Aktion abgeschlossen!\n\n- Erfolgreich gesendet an: *{success_count} Nutzer*\n- Fehlgeschlagen/Blockiert: *{fail_count} Nutzer*"; await query.edit_message_text(final_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück zum Admin-Menü", callback_data="admin_main_menu")]]), parse_mode='Markdown')
 
-# --- Neue Admin-Eingabeverarbeitung ---
+# --- Admin-Eingabeverarbeitung & Broadcast ---
 async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    awaiting = context.user_data.pop('admin_awaiting_input')
+    awaiting = context.user_data.get('admin_awaiting_input')
     text_input = update.message.text
-
+    
     if awaiting == 'broadcast_message':
         context.user_data['broadcast_message'] = text_input
+        # Wichtig: Den 'awaiting' Zustand hier noch NICHT löschen, damit die Bestätigung funktioniert
         keyboard = [[InlineKeyboardButton("✅ Ja, senden", callback_data="confirm_broadcast")], [InlineKeyboardButton("❌ Abbrechen", callback_data="cancel_broadcast")]]; reply_markup = InlineKeyboardMarkup(keyboard)
         stats = load_stats(); user_count = len([u for u in stats.get("users", {}).values() if not u.get("banned")])
         await update.message.reply_text(f"Willst du die folgende Nachricht wirklich an *{user_count}* nicht-gebannte Nutzer senden?\n\n---\n{text_input}\n---", reply_markup=reply_markup, parse_mode='Markdown')
 
     elif awaiting == 'ban_user_id':
+        context.user_data.pop('admin_awaiting_input')
         user_id_to_ban = text_input
         if not user_id_to_ban.isdigit(): await update.message.reply_text("⚠️ Ungültige User ID."); return
         stats = load_stats()
@@ -611,6 +612,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         await show_admin_menu(update, context)
 
     elif awaiting == 'unban_user_id':
+        context.user_data.pop('admin_awaiting_input')
         user_id_to_unban = text_input
         if not user_id_to_unban.isdigit(): await update.message.reply_text("⚠️ Ungültige User ID."); return
         stats = load_stats()
@@ -619,26 +621,10 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(f"✅ Nutzer `{user_id_to_unban}` wurde entsperrt."); await send_or_update_admin_log(context, User(id=int(user_id_to_unban), first_name="N/A", is_bot=False), event_text="Wurde entsperrt")
         await show_admin_menu(update, context)
 
-    elif awaiting == 'givediscount_details':
-        parts = text_input.split()
-        if len(parts) != 3: await update.message.reply_text("⚠️ Falsches Format. Bitte nutze: `<user_id> <paket> <betrag>`"); return
-        user_id, package_key, amount_str = parts
-        if not user_id.isdigit() or not amount_str.isdigit(): await update.message.reply_text("User ID und Betrag müssen Zahlen sein."); return
-        valid_packages = {f"{t}_{a}" for t in PRICES for a in PRICES[t]};
-        if package_key not in valid_packages: await update.message.reply_text(f"Ungültiges Paket. Gültig: `{', '.join(valid_packages)}`"); return
-        stats = load_stats();
-        if user_id not in stats["users"]: await update.message.reply_text("Nutzer nicht gefunden."); return
-        stats["users"][user_id].setdefault("discounts", {})[package_key] = int(amount_str); save_stats(stats)
-        await update.message.reply_text(f"✅ Rabatt von *{amount_str}€* für Paket `{package_key}` an Nutzer `{user_id}` vergeben.", parse_mode='Markdown')
-        try:
-            msg = f"🎉 Du hast einen exklusiven Rabatt erhalten!\n\nDir wurde soeben ein persönlicher Rabatt von *{amount_str}€* für das Paket *{package_key.replace('_', ' ').capitalize()}* gutgeschrieben."
-            keyboard = [[InlineKeyboardButton("🛍️ Jetzt Angebote ansehen!", callback_data="show_price_options")]]; await context.bot.send_message(chat_id=user_id, text=msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-        except Exception as e: await update.message.reply_text(f"Konnte Nutzer nicht benachrichtigen (möglicherweise Bot blockiert): {e}")
-        await show_admin_menu(update, context)
-
 async def do_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     message_to_send = context.user_data.pop('broadcast_message', None)
+    context.user_data.pop('admin_awaiting_input', None) # Jetzt den Zustand aufräumen
     if not message_to_send: await query.edit_message_text("Fehler: Nachricht nicht gefunden."); return
     await query.edit_message_text("🚀 Sende Broadcast... Dies kann eine Weile dauern.")
     stats = load_stats(); all_users = list(stats.get("users", {}).keys()); success_count, fail_count = 0, 0
@@ -656,8 +642,6 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin))
     application.add_handler(CommandHandler("setsummary", set_summary_message))
-    
-    # Die alten Befehle wurden entfernt, da sie jetzt im Admin-Menü sind
     
     application.add_handler(CallbackQueryHandler(handle_callback_query))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
