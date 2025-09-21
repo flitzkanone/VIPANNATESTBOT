@@ -73,6 +73,31 @@ def is_user_banned(user_id: int) -> bool:
     user_data = stats.get("users", {}).get(str(user_id), {})
     return user_data.get("banned", False)
 
+def get_package_button_text(media_type: str, amount: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Erstellt den dynamischen Text für die Paket-Buttons."""
+    stats = load_stats()
+    user_data = stats.get("users", {}).get(str(user_id), {})
+    
+    base_price = PRICES[media_type][amount]
+    package_key = f"{media_type}_{amount}"
+    label = f"{amount} {media_type.capitalize()}"
+    
+    discount_price = -1
+    
+    # Prüft auf Admin-Rabatt
+    if "discounts" in user_data and package_key in user_data["discounts"]:
+        discount = user_data["discounts"][package_key]
+        discount_price = max(1, base_price - discount)
+    # Prüft auf automatischen 2h-Rabatt
+    elif context.user_data.get('discount_active'):
+        discount_price = max(1, base_price - 1)
+        
+    if discount_price != -1:
+        # --- NEUES, KÜRZERES FORMAT ---
+        return f"{label} ~{base_price}~{discount_price}€ ✨"
+    else:
+        return f"{label} {base_price}€"
+
 async def check_user_status(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     if str(user_id) == ADMIN_USER_ID: return "admin", False, None
     stats = load_stats()
@@ -106,8 +131,7 @@ async def check_user_status(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     return "active", False, stats["users"][user_id_str]
 
 async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: User, event_text: str = ""):
-    if not NOTIFICATION_GROUP_ID or str(user.id) == ADMIN_USER_ID:
-        return
+    if not NOTIFICATION_GROUP_ID or str(user.id) == ADMIN_USER_ID: return
 
     user_id_str = str(user.id)
     stats = load_stats()
@@ -278,7 +302,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     
     if is_user_banned(user.id):
-        await update.message.reply_text("Du bist von der Nutzung dieses Bots ausgeschlossen.")
+        if update.message:
+            await update.message.reply_text("Du bist von der Nutzung dieses Bots ausgeschlossen.")
+        elif update.callback_query:
+            await update.callback_query.answer("Du bist von der Nutzung dieses Bots ausgeschlossen.", show_alert=True)
         return
 
     try:
@@ -297,9 +324,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         if is_eligible_for_discount:
             context.user_data['discount_active'] = True
-            discount_message = "Willkommen zurück!\n\nAls Dankeschön für dein Interesse erhältst du einen *einmaligen Rabatt von 1€* auf alle Pakete bei deinem nächsten Kauf."
-            if update.callback_query: await context.bot.send_message(chat_id, discount_message, parse_mode='Markdown')
-            else: await update.message.reply_text(discount_message, parse_mode='Markdown')
+            
+            discount_notification_text = (
+                "🎁 DEIN PERSÖNLICHES ANGEBOT! 🎁\n\n"
+                "Wir haben dir gerade einen exklusiven Rabatt auf ausgewählte Pakete gutgeschrieben!\n\n"
+                "Klicke hier, um deine neuen, reduzierten Preise zu sehen und direkt zuzuschlagen:"
+            )
+            discount_notification_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💸 Zu meinen exklusiven Preisen 💸", callback_data="show_price_options")]
+            ])
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=discount_notification_text,
+                reply_markup=discount_notification_keyboard
+            )
 
         if should_notify:
             event_text = "Bot gestartet (neuer Nutzer)" if status == "new" else "Bot erneut gestartet"
@@ -329,6 +367,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             msg = await context.bot.send_message(chat_id=chat_id, text=welcome_text, reply_markup=reply_markup)
             context.user_data["messages_to_delete"] = [msg.message_id]
     else:
+        if update.message is None: return
         msg = await update.message.reply_text(welcome_text, reply_markup=reply_markup)
         context.user_data["messages_to_delete"] = [msg.message_id]
 
@@ -427,7 +466,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await execute_broadcast(update, context)
         elif data == "admin_broadcast_cancel":
             context.user_data.pop('broadcast_message_text', None)
-            await query.edit_message_text("Broadcast abgebrochen.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_main_menu")]]))
+            await query.edit_message_text("Broadcast abgebrochen.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück zum Admin-Menü", callback_data="admin_main_menu")]]))
         return
 
     if data == "download_vouchers_pdf":
@@ -487,7 +526,24 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             with open(random_image_path, 'rb') as photo_file:
                 photo_message = await context.bot.send_photo(chat_id=chat_id, photo=photo_file, protect_content=True)
             caption = "Wähle dein gewünschtes Paket:"
-            keyboard_buttons = [[InlineKeyboardButton("10 Bilder", callback_data="select_package:bilder:10"), InlineKeyboardButton("10 Videos", callback_data="select_package:videos:10")], [InlineKeyboardButton("25 Bilder", callback_data="select_package:bilder:25"), InlineKeyboardButton("25 Videos", callback_data="select_package:videos:25")], [InlineKeyboardButton("35 Bilder", callback_data="select_package:bilder:35"), InlineKeyboardButton("35 Videos", callback_data="select_package:videos:35")], [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]]
+            
+            # --- Dynamische Buttons mit der Hilfsfunktion erstellen ---
+            keyboard_buttons = [
+                [
+                    InlineKeyboardButton(get_package_button_text("bilder", 10, user.id, context), callback_data="select_package:bilder:10"),
+                    InlineKeyboardButton(get_package_button_text("videos", 10, user.id, context), callback_data="select_package:videos:10")
+                ],
+                [
+                    InlineKeyboardButton(get_package_button_text("bilder", 25, user.id, context), callback_data="select_package:bilder:25"),
+                    InlineKeyboardButton(get_package_button_text("videos", 25, user.id, context), callback_data="select_package:videos:25")
+                ],
+                [
+                    InlineKeyboardButton(get_package_button_text("bilder", 35, user.id, context), callback_data="select_package:bilder:35"),
+                    InlineKeyboardButton(get_package_button_text("videos", 35, user.id, context), callback_data="select_package:videos:35")
+                ],
+                [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]
+            ]
+            
             text_message = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard_buttons))
             context.user_data["messages_to_delete"] = [photo_message.message_id, text_message.message_id]
 
@@ -635,26 +691,20 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     user = update.effective_user
     text_input = update.message.text
     
-    # --- Admin Input Handling ---
     if str(user.id) == ADMIN_USER_ID:
-        # Discount menu input
         if context.user_data.get('rabatt_in_progress'):
             await handle_admin_discount_input(update, context)
             return
-        # User management input
         if context.user_data.get('awaiting_user_id_for_sperren'):
             await handle_admin_user_management_input(update, context, "sperren")
             return
         if context.user_data.get('awaiting_user_id_for_entsperren'):
             await handle_admin_user_management_input(update, context, "entsperren")
             return
-        # Broadcast message input
         if context.user_data.get('awaiting_broadcast_message'):
             await handle_admin_broadcast_input(update, context)
             return
 
-    # --- Regular User Input Handling ---
-    # Voucher code handling
     if context.user_data.get("awaiting_voucher"):
         provider = context.user_data.pop("awaiting_voucher"); code = text_input
         vouchers = load_vouchers(); vouchers[provider].append(code); save_vouchers(vouchers)
@@ -762,13 +812,25 @@ async def finalize_discount_action(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("Fehler: Kein Ziel für den Rabatt gefunden.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_main_menu")]])); return
         
     success_count = 0; fail_count = 0
-    rabatt_message = "🎉 Du hast einen exklusiven Rabatt erhalten!\n\nSchau dir gleich die neuen Preise an und sichere dir dein Paket günstiger."
+    
+    discount_notification_text = (
+        "🎁 DEIN PERSÖNLICHES ANGEBOT! 🎁\n\n"
+        "Wir haben dir gerade einen exklusiven Rabatt auf ausgewählte Pakete gutgeschrieben!\n\n"
+        "Klicke hier, um deine neuen, reduzierten Preise zu sehen und direkt zuzuschlagen:"
+    )
+    discount_notification_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💸 Zu meinen exklusiven Preisen 💸", callback_data="show_price_options")]
+    ])
 
     for user_id in target_ids:
         if user_id in stats["users"] and not stats["users"][user_id].get("banned", False):
             stats["users"][user_id]["discounts"] = rabatt_data
             try:
-                await context.bot.send_message(chat_id=user_id, text=rabatt_message)
+                await context.bot.send_message(
+                    chat_id=user_id, 
+                    text=discount_notification_text,
+                    reply_markup=discount_notification_keyboard
+                )
                 success_count += 1
             except (error.Forbidden, error.BadRequest): fail_count += 1
 
