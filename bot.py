@@ -206,6 +206,7 @@ async def cleanup_previous_messages(chat_id: int, context: ContextTypes.DEFAULT_
             except error.TelegramError: pass
         context.user_data["messages_to_delete"] = []
 
+# --- NEUE, ÜBERARBEITETE VORSCHAU-FUNKTION ---
 async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYPE, schwester_code: str):
     await cleanup_previous_messages(update.effective_chat.id, context)
     chat_id = update.effective_chat.id
@@ -225,10 +226,11 @@ async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data[f'preview_index_{schwester_code}'] = 0
     image_to_show_path = image_paths[0]
 
+    # Vereinfachter Text für die separate Nachricht
     if schwester_code == 'gs':
-        caption = f"Heyy ich bin Anna, ich bin {AGE_ANNA} Jahre alt und mache mit meiner Schwester zusammen 🌶️ videos und Bilder falls du lust hast speziele videos zu bekommen schreib mir 😏 @Anna_2008_030"
+        text_content = f"Heyy ich bin Anna, {AGE_ANNA} Jahre alt."
     else:
-        caption = f"Heyy, mein name ist Luna ich bin {AGE_LUNA} Jahre alt und mache 🌶️ videos und Bilder. wenn du Spezielle wünsche hast schreib meiner Schwester für mehr.\nMeine Schwester: @Anna_2008_030"
+        text_content = f"Heyy, mein Name ist Luna, {AGE_LUNA} Jahre alt."
     
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🛍️ Zu den Preisen", callback_data=f"select_schwester:{schwester_code}:prices")],
@@ -236,17 +238,24 @@ async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]
     ])
     
+    # 1. Bild ohne Text senden
     with open(image_to_show_path, 'rb') as photo_file:
-        sent_message = await context.bot.send_photo(
+        photo_message = await context.bot.send_photo(
             chat_id=chat_id,
             photo=photo_file,
-            caption=caption,
-            reply_markup=keyboard,
             protect_content=True
         )
+
+    # 2. Text mit Knöpfen senden
+    text_message = await context.bot.send_message(
+        chat_id=chat_id,
+        text=text_content,
+        reply_markup=keyboard
+    )
     
-    context.user_data["preview_message_id"] = sent_message.message_id
-    context.user_data["messages_to_delete"] = [sent_message.message_id]
+    # IDs für späteres Bearbeiten und Löschen speichern
+    context.user_data["preview_photo_message_id"] = photo_message.message_id
+    context.user_data["messages_to_delete"] = [photo_message.message_id, text_message.message_id]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user; chat_id = update.effective_chat.id
@@ -373,12 +382,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         image_paths = get_media_files(schwester_code, "vorschau"); image_paths.sort()
         if not image_paths: await query.answer("Keine weiteren Bilder.", show_alert=True); return
         index_key = f'preview_index_{schwester_code}'; current_index = context.user_data.get(index_key, 0); next_index = (current_index + 1) % len(image_paths); context.user_data[index_key] = next_index
-        preview_message_id = context.user_data.get("preview_message_id")
-        if preview_message_id:
+        photo_message_id = context.user_data.get("preview_photo_message_id")
+        if photo_message_id:
             try:
                 with open(image_paths[next_index], 'rb') as photo_file:
                     media = InputMediaPhoto(photo_file)
-                    await context.bot.edit_message_media(chat_id, preview_message_id, media, reply_markup=query.message.reply_markup)
+                    await context.bot.edit_message_media(chat_id, photo_message_id, media)
             except error.BadRequest as e:
                 if "message is not modified" not in str(e): logger.warning(f"Bild bearbeiten fehlgeschlagen: {e}"); await send_preview_message(update, context, schwester_code)
             except Exception as e: logger.error(f"Unerwarteter Fehler bei next_preview: {e}"); await send_preview_message(update, context, schwester_code)
