@@ -116,7 +116,7 @@ def get_package_button_text(media_type: str, amount: int, user_id: int, context:
     stats = load_stats(); user_data = stats.get("users", {}).get(str(user_id), {}); base_price = PRICES[media_type][amount]
     package_key = f"{media_type}_{amount}"; label = f"{amount} {media_type.capitalize()}"; discount_price = -1
     if "discounts" in user_data and package_key in user_data["discounts"]:
-        discount = user_data["discounts"][package_key]; discount_price = max(0, base_price - discount) # Allow 0 for rewards, which are now 1€
+        discount = user_data["discounts"][package_key]; discount_price = max(0, base_price - discount)
     elif context.user_data.get('discount_active'): discount_price = max(1, base_price - 1)
     if discount_price != -1: return f"{label} ~{base_price}~{discount_price}€ ✨"
     else: return f"{label} {base_price}€"
@@ -220,7 +220,6 @@ async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data[f'preview_index_{schwester_code}'] = 0; image_to_show_path = image_paths[0]
     with open(image_to_show_path, 'rb') as photo_file: photo_message = await context.bot.send_photo(chat_id=chat_id, photo=photo_file, protect_content=True)
     
-    # --- VEREINFACHTER VORSCHAUTEXT ---
     if schwester_code == 'gs':
         caption = f"Ich bin Anna, {AGE_ANNA} Jahre alt."
     else:
@@ -288,8 +287,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         msg = await update.message.reply_text(welcome_text, reply_markup=reply_markup)
         context.user_data["messages_to_delete"] = [msg.message_id]
 
-# ... (Rest of the code remains the same)
-
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query; await query.answer()
     data = query.data; chat_id = update.effective_chat.id; user = update.effective_user
@@ -343,7 +340,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         elif data.startswith("admin_preview_increase:"): user_id_to_manage = data.split(":")[1]; await execute_manage_preview_limit(update, context, user_id_to_manage, 'increase')
         return
 
-    # --- REFERRAL MENU ---
     elif data == "referral_menu":
         stats = load_stats(); user_data = stats.get("users", {}).get(str(user.id), {})
         referral_count = len(user_data.get("referrals", []))
@@ -351,7 +347,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         bot_username = (await context.bot.get_me()).username
         ref_link = f"https://t.me/{bot_username}?start=ref_{user.id}"
         
-        # --- NEUER TEXT MIT BEISPIEL ---
         text = (
             "🤝 *Freunde einladen & Belohnung erhalten*\n\n"
             "Teile deinen persönlichen Link mit Freunden. Wenn sich ein neuer Nutzer über deinen Link anmeldet *und einen Kauf tätigt*, erhältst du eine Belohnung!\n\n"
@@ -459,23 +454,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "🔒 *Admin-Menü*\n\nWähle eine Option:"
-    keyboard = [
-        [InlineKeyboardButton("📊 Nutzer-Statistiken", callback_data="admin_stats_users"), InlineKeyboardButton("🖱️ Klick-Statistiken", callback_data="admin_stats_clicks")],
-        [InlineKeyboardButton("🎟️ Gutscheine", callback_data="admin_show_vouchers"), InlineKeyboardButton("💸 Rabatt senden", callback_data="admin_discount_start")],
-        [InlineKeyboardButton("👤 Nutzer verwalten", callback_data="admin_user_manage"), InlineKeyboardButton("📢 Broadcast senden", callback_data="admin_broadcast_start")],
-        [InlineKeyboardButton("💸 Rabatte verwalten", callback_data="admin_manage_discounts")],
-        [InlineKeyboardButton("🔄 Statistiken zurücksetzen", callback_data="admin_reset_stats")]]
+    keyboard = [[InlineKeyboardButton("📊 Nutzer-Statistiken", callback_data="admin_stats_users"), InlineKeyboardButton("🖱️ Klick-Statistiken", callback_data="admin_stats_clicks")], [InlineKeyboardButton("🎟️ Gutscheine", callback_data="admin_show_vouchers"), InlineKeyboardButton("💸 Rabatt senden", callback_data="admin_discount_start")], [InlineKeyboardButton("👤 Nutzer verwalten", callback_data="admin_user_manage"), InlineKeyboardButton("📢 Broadcast senden", callback_data="admin_broadcast_start")], [InlineKeyboardButton("💸 Rabatte verwalten", callback_data="admin_manage_discounts")], [InlineKeyboardButton("🔄 Statistiken zurücksetzen", callback_data="admin_reset_stats")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     if update.callback_query: await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
     else: await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def show_user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "👤 *Nutzerverwaltung*\n\nWähle eine Aktion aus:"
-    keyboard = [
-        [InlineKeyboardButton("🚫 Nutzer sperren", callback_data="admin_user_ban_start")],
-        [InlineKeyboardButton("✅ Nutzer entsperren", callback_data="admin_user_unban_start")],
-        [InlineKeyboardButton("🖼️ Vorschau-Limit anpassen", callback_data="admin_preview_limit_start")],
-        [InlineKeyboardButton("« Zurück", callback_data="admin_main_menu")]]
+    keyboard = [[InlineKeyboardButton("🚫 Nutzer sperren", callback_data="admin_user_ban_start")], [InlineKeyboardButton("✅ Nutzer entsperren", callback_data="admin_user_unban_start")], [InlineKeyboardButton("🖼️ Vorschau-Limit anpassen", callback_data="admin_preview_limit_start")], [InlineKeyboardButton("« Zurück", callback_data="admin_main_menu")]]
     await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def show_vouchers_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -612,4 +598,46 @@ async def handle_admin_preview_limit_input(update: Update, context: ContextTypes
 async def execute_manage_preview_limit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str, action: str):
     stats = load_stats(); user_data = stats["users"].get(user_id)
     if not user_data: await update.callback_query.edit_message_text(f"Fehler: Nutzer {user_id} nicht gefunden.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_user_manage")]])); return
-    current_clicks = user_data.get('prev
+    current_clicks = user_data.get('preview_clicks', 0)
+    if action == 'reset': new_clicks = 0; verb = "zurückgesetzt"
+    else: new_clicks = current_clicks + 25; verb = "erhöht"
+    stats["users"][user_id]['preview_clicks'] = new_clicks; save_stats(stats)
+    text = f"✅ Vorschau-Limit für Nutzer `{user_id}` wurde auf *{new_clicks}* {verb}."
+    await update.callback_query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_user_manage")]]))
+
+async def process_referral_reward(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    stats = load_stats(); user_id_str = str(user_id); user_data = stats["users"].get(user_id_str, {})
+    if user_data.get("reward_triggered_for_referrer"): return
+    referrer_id = user_data.get("referrer_id")
+    if referrer_id and referrer_id in stats["users"]:
+        stats["users"][user_id_str]["reward_triggered_for_referrer"] = True
+        stats["users"][referrer_id]["successful_referrals"] = stats["users"][referrer_id].get("successful_referrals", 0) + 1
+        
+        # --- BELOHNUNG: 4€ Rabatt auf das 5€-Paket "10 Bilder", Endpreis 1€. ---
+        reward_discount = {"bilder_10": 4} 
+        
+        stats["users"][referrer_id].setdefault("discounts", {}).update(reward_discount)
+        save_stats(stats); await save_discounts_to_telegram(context)
+        
+        reward_text = ("🎉 *Belohnung erhalten!*\n\n" "Ein von dir geworbener Freund hat gerade seinen ersten Kauf getätigt. Als Dankeschön haben wir dir einen exklusiven Rabatt gutgeschrieben!")
+        try: await context.bot.send_message(chat_id=referrer_id, text=reward_text, parse_mode='Markdown')
+        except (error.Forbidden, error.BadRequest): logger.warning(f"Could not send referral reward notification to user {referrer_id}")
+
+async def post_init(application: Application):
+    await restore_stats_from_pinned_message(application)
+    await load_discounts_from_telegram(application)
+
+def main() -> None:
+    application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("admin", admin))
+    application.add_handler(CallbackQueryHandler(handle_callback_query))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+
+    if WEBHOOK_URL:
+        port = int(os.environ.get("PORT", 8443)); application.run_webhook(listen="0.0.0.0", port=port, url_path=BOT_TOKEN, webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
+    else:
+        logger.info("Starte Bot im Polling-Modus"); application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
