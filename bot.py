@@ -489,12 +489,39 @@ async def set_summary_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # --- Discount Menu Helper ---
 async def show_discount_package_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rabatt_data = context.user_data.get('rabatt_data', {}); def get_button_text(pkg, name): discount = rabatt_data.get(pkg); return f"{name} (Rabatt: {discount}€)" if discount is not None else name
-    keyboard = [[InlineKeyboardButton(get_button_text('bilder_10', "Bilder 10"), callback_data="admin_discount_select_package:bilder_10"), InlineKeyboardButton(get_button_text('videos_10', "Videos 10"), callback_data="admin_discount_select_package:videos_10")], [InlineKeyboardButton(get_button_text('bilder_25', "Bilder 25"), callback_data="admin_discount_select_package:bilder_25"), InlineKeyboardButton(get_button_text('videos_25', "Videos 25"), callback_data="admin_discount_select_package:videos_25")], [InlineKeyboardButton(get_button_text('bilder_35', "Bilder 35"), callback_data="admin_discount_select_package:bilder_35"), InlineKeyboardButton(get_button_text('videos_35', "Videos 35"), callback_data="admin_discount_select_package:videos_35")], [InlineKeyboardButton("✅ Aktion abschließen & senden", callback_data="admin_discount_finalize")], [InlineKeyboardButton("❌ Abbrechen", callback_data="admin_main_menu")]]
-    target_type = context.user_data.get('rabatt_target_type'); target_id = context.user_data.get('rabatt_target_id'); target_desc = "Alle Nutzer" if target_type == 'all' else f"Nutzer `{target_id}`"; text = f"💸 *Rabatt-Manager - Schritt 2: Pakete*\n\nZiel: {target_desc}\n\nWähle ein Paket, um einen Rabatt festzulegen oder zu ändern."
+    rabatt_data = context.user_data.get('rabatt_data', {})
+    
+    def get_button_text(pkg, name):
+        discount = rabatt_data.get(pkg)
+        return f"{name} (Rabatt: {discount}€)" if discount is not None else name
+
+    keyboard = [
+        [
+            InlineKeyboardButton(get_button_text('bilder_10', "Bilder 10"), callback_data="admin_discount_select_package:bilder_10"),
+            InlineKeyboardButton(get_button_text('videos_10', "Videos 10"), callback_data="admin_discount_select_package:videos_10"),
+        ],
+        [
+            InlineKeyboardButton(get_button_text('bilder_25', "Bilder 25"), callback_data="admin_discount_select_package:bilder_25"),
+            InlineKeyboardButton(get_button_text('videos_25', "Videos 25"), callback_data="admin_discount_select_package:videos_25"),
+        ],
+        [
+            InlineKeyboardButton(get_button_text('bilder_35', "Bilder 35"), callback_data="admin_discount_select_package:bilder_35"),
+            InlineKeyboardButton(get_button_text('videos_35', "Videos 35"), callback_data="admin_discount_select_package:videos_35"),
+        ],
+        [InlineKeyboardButton("✅ Aktion abschließen & senden", callback_data="admin_discount_finalize")],
+        [InlineKeyboardButton("❌ Abbrechen", callback_data="admin_main_menu")],
+    ]
+    
+    target_type = context.user_data.get('rabatt_target_type')
+    target_id = context.user_data.get('rabatt_target_id')
+    target_desc = "Alle Nutzer" if target_type == 'all' else f"Nutzer `{target_id}`"
+    text = f"💸 *Rabatt-Manager - Schritt 2: Pakete*\n\nZiel: {target_desc}\n\nWähle ein Paket, um einen Rabatt festzulegen oder zu ändern."
+    
     query = update.callback_query
-    if query: await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-    else: await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    if query:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def handle_admin_discount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_input = update.message.text; awaiting = context.user_data.get('rabatt_awaiting')
