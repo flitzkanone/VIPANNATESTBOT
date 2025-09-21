@@ -208,16 +208,45 @@ async def cleanup_previous_messages(chat_id: int, context: ContextTypes.DEFAULT_
 
 async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYPE, schwester_code: str):
     await cleanup_previous_messages(update.effective_chat.id, context)
-    chat_id = update.effective_chat.id; image_paths = get_media_files(schwester_code, "vorschau"); image_paths.sort()
+    chat_id = update.effective_chat.id
+    image_paths = get_media_files(schwester_code, "vorschau")
+    image_paths.sort()
+    
     if not image_paths:
         logger.error(f"Keine Vorschau-Bilder für '{schwester_code}' im Ordner '{MEDIA_DIR}' gefunden!")
-        await context.bot.send_message(chat_id=chat_id, text="Ups! Ich konnte gerade keine passenden Inhalte finden...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="main_menu")]])); return
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text="Ups! Ich konnte gerade keine passenden Inhalte finden...",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="main_menu")]])
+        )
+        context.user_data["messages_to_delete"] = [msg.message_id]
+        return
+
     context.user_data[f'preview_index_{schwester_code}'] = 0
-    with open(image_paths[0], 'rb') as photo_file: photo_message = await context.bot.send_photo(chat_id=chat_id, photo=photo_file, protect_content=True)
-    caption = f"Heyy ich bin Anna, ich bin {AGE_ANNA} Jahre alt..." if schwester_code == 'gs' else f"Heyy, mein name ist Luna ich bin {AGE_LUNA} Jahre alt..."
-    keyboard_buttons = [[InlineKeyboardButton("🛍️ Zu den Preisen", callback_data=f"select_schwester:{schwester_code}:prices")], [InlineKeyboardButton("🖼️ Nächstes Bild", callback_data=f"next_preview:{schwester_code}")], [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]]
-    text_message = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard_buttons))
-    context.user_data["messages_to_delete"] = [photo_message.message_id, text_message.message_id]
+    image_to_show_path = image_paths[0]
+
+    if schwester_code == 'gs':
+        caption = f"Heyy ich bin Anna, ich bin {AGE_ANNA} Jahre alt und mache mit meiner Schwester zusammen 🌶️ videos und Bilder falls du lust hast speziele videos zu bekommen schreib mir 😏 @Anna_2008_030"
+    else:
+        caption = f"Heyy, mein name ist Luna ich bin {AGE_LUNA} Jahre alt und mache 🌶️ videos und Bilder. wenn du Spezielle wünsche hast schreib meiner Schwester für mehr.\nMeine Schwester: @Anna_2008_030"
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛍️ Zu den Preisen", callback_data=f"select_schwester:{schwester_code}:prices")],
+        [InlineKeyboardButton("🖼️ Nächstes Bild", callback_data=f"next_preview:{schwester_code}")],
+        [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]
+    ])
+    
+    with open(image_to_show_path, 'rb') as photo_file:
+        sent_message = await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=photo_file,
+            caption=caption,
+            reply_markup=keyboard,
+            protect_content=True
+        )
+    
+    context.user_data["preview_message_id"] = sent_message.message_id
+    context.user_data["messages_to_delete"] = [sent_message.message_id]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user; chat_id = update.effective_chat.id
@@ -244,36 +273,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query; await query.answer()
         try: await query.edit_message_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard))
         except error.TelegramError:
-            try: await query.delete_message() # Safely delete if edit fails
+            try: await query.delete_message()
             except error.TelegramError: pass
             msg = await context.bot.send_message(chat_id=chat_id, text=welcome_text, reply_markup=InlineKeyboardMarkup(keyboard)); context.user_data["messages_to_delete"] = [msg.message_id]
     else:
         msg = await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard)); context.user_data["messages_to_delete"] = [msg.message_id]
 
-# KORRIGIERTE handle_callback_query FUNKTION
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    chat_id = update.effective_chat.id
-    user = update.effective_user
-
-    if is_user_banned(user.id):
-        logger.warning(f"Gebannter Nutzer {user.id} nutzte Callback.")
-        return
-
-    if data == "main_menu":
-        await start(update, context)
-        return
-
+    query = update.callback_query; await query.answer(); data = query.data; chat_id = update.effective_chat.id; user = update.effective_user
+    if is_user_banned(user.id): logger.warning(f"Gebannter Nutzer {user.id} nutzte Callback."); return
+    if data == "main_menu": await start(update, context); return
     if data.startswith("admin_"):
-        if str(user.id) != ADMIN_USER_ID:
-            await query.answer("⛔️ Keine Berechtigung.", show_alert=True)
-            return
+        if str(user.id) != ADMIN_USER_ID: await query.answer("⛔️ Keine Berechtigung.", show_alert=True); return
         if data in ["admin_main_menu", "admin_user_management"]:
             if 'admin_awaiting_input' in context.user_data: del context.user_data['admin_awaiting_input']
-        
-        # ... (der Rest des Admin-Teils bleibt unverändert)
         if data == "admin_main_menu": await show_admin_menu(update, context)
         elif data == "admin_show_vouchers": await show_vouchers_panel(update, context)
         elif data == "admin_stats_users":
@@ -317,8 +330,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             context.user_data['admin_awaiting_input'] = 'unban_user_id'; text = "✅ Bitte sende die ID des zu entsperrenden Nutzers."
             await send_or_edit_admin_message(update, context, text, InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_user_management")]]))
         return
-
-    # User-facing part
     if data == "download_vouchers_pdf":
         await query.answer("PDF wird erstellt..."); vouchers = load_vouchers(); pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=16); pdf.cell(0, 10, "Gutschein Report", ln=True, align='C'); pdf.ln(10)
         for provider in ["amazon", "paysafe"]:
@@ -326,23 +337,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             codes = vouchers.get(provider, []); pdf.cell(0, 8, "\n".join([f"- {c.encode('latin-1', 'ignore').decode('latin-1')}" for c in codes]) or "Keine vorhanden.", ln=True)
         pdf_buffer = BytesIO(pdf.output(dest='S').encode('latin-1')); pdf_buffer.seek(0)
         await context.bot.send_document(chat_id=chat_id, document=pdf_buffer, filename=f"Gutschein-Report_{datetime.now().strftime('%Y-%m-%d')}.pdf"); return
-
     if data in ["show_preview_options", "show_price_options"]:
         action = "preview" if "preview" in data else "prices"; text = "Für wen interessierst du dich?"; keyboard = [[InlineKeyboardButton("Kleine Schwester", callback_data=f"select_schwester:ks:{action}"), InlineKeyboardButton("Große Schwester", callback_data=f"select_schwester:gs:{action}")], [InlineKeyboardButton("« Zurück", callback_data="main_menu")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-    
-    # --- HIER IST DIE KORREKTUR ---
     elif data.startswith("select_schwester:"):
         await cleanup_previous_messages(chat_id, context)
-        try:
-            await query.message.delete()
-        except error.BadRequest:
-            logger.info(f"Message {query.message.message_id} was already deleted.")
-        except Exception as e:
-            logger.warning(f"Could not delete message {query.message.message_id}: {e}")
-        
-        # ... (der Rest dieser Sektion bleibt gleich)
-        _, schwester_code, action = data.split(":")
-        stats = load_stats(); user_data = stats.get("users", {}).get(str(user.id), {}); preview_clicks = user_data.get("preview_clicks", 0); viewed_sisters = user_data.get("viewed_sisters", [])
+        try: await query.message.delete()
+        except error.BadRequest: logger.info(f"Message {query.message.message_id} was already deleted.")
+        except Exception as e: logger.warning(f"Could not delete message {query.message.message_id}: {e}")
+        _, schwester_code, action = data.split(":"); stats = load_stats(); user_data = stats.get("users", {}).get(str(user.id), {}); preview_clicks = user_data.get("preview_clicks", 0); viewed_sisters = user_data.get("viewed_sisters", [])
         if action == "preview" and preview_clicks >= 25 and schwester_code in viewed_sisters:
             msg = await context.bot.send_message(chat_id, "Du hast dein Vorschau-Limit erreicht.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zum Hauptmenü", callback_data="main_menu")]])); context.user_data["messages_to_delete"] = [msg.message_id]; return
         if schwester_code not in viewed_sisters: viewed_sisters.append(schwester_code); user_data["viewed_sisters"] = viewed_sisters; stats["users"][str(user.id)] = user_data; save_stats(stats)
@@ -361,33 +363,35 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             keyboard_buttons = [[create_package_button("bilder", 10), create_package_button("videos", 10)], [create_package_button("bilder", 25), create_package_button("videos", 25)], [create_package_button("bilder", 35), create_package_button("videos", 35)], [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]]
             caption = "Wähle dein Paket:" + ("\n\nDeine Rabatte wurden bereits markiert! ✨" if bool(specific_discounts) or welcome_discount_active else "")
             text_message = await context.bot.send_message(chat_id, caption, reply_markup=InlineKeyboardMarkup(keyboard_buttons)); context.user_data["messages_to_delete"] = [photo_message.message_id, text_message.message_id]
-
     elif data.startswith("next_preview:"):
         stats = load_stats(); user_data = stats.get("users", {}).get(str(user.id), {}); preview_clicks = user_data.get("preview_clicks", 0)
         if preview_clicks >= 25:
             await query.answer("Vorschau-Limit erreicht!", show_alert=True); await cleanup_previous_messages(chat_id, context); _, schwester_code = data.split(":")
             limit_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(f"🛍️ Preise für {schwester_code.upper()}", callback_data=f"select_schwester:{schwester_code}:prices")], [InlineKeyboardButton("« Hauptmenü", callback_data="main_menu")]]); msg = await context.bot.send_message(chat_id, "Du hast dein Vorschau-Limit erreicht.", reply_markup=limit_keyboard); context.user_data["messages_to_delete"] = [msg.message_id]; return
         user_data["preview_clicks"] = preview_clicks + 1; stats["users"][str(user.id)] = user_data; save_stats(stats); await track_event("next_preview", context, user.id); _, schwester_code = data.split(":")
-        await send_or_update_admin_log(context, user, event_text=f"Nächstes Bild ({schwester_code.upper()})"); image_paths = get_media_files(schwester_code, "vorschau"); image_paths.sort(); index_key = f'preview_index_{schwester_code}'; current_index = context.user_data.get(index_key, 0); next_index = (current_index + 1) % len(image_paths) if image_paths else 0; context.user_data[index_key] = next_index
-        if image_paths and (photo_message_id := context.user_data.get("messages_to_delete", [None])[0]):
+        await send_or_update_admin_log(context, user, event_text=f"Nächstes Bild ({schwester_code.upper()})")
+        image_paths = get_media_files(schwester_code, "vorschau"); image_paths.sort()
+        if not image_paths: await query.answer("Keine weiteren Bilder.", show_alert=True); return
+        index_key = f'preview_index_{schwester_code}'; current_index = context.user_data.get(index_key, 0); next_index = (current_index + 1) % len(image_paths); context.user_data[index_key] = next_index
+        preview_message_id = context.user_data.get("preview_message_id")
+        if preview_message_id:
             try:
-                with open(image_paths[next_index], 'rb') as photo_file: await context.bot.edit_message_media(chat_id, photo_message_id, InputMediaPhoto(photo_file))
-            except error.TelegramError as e: logger.warning(f"Bild bearbeiten fehlgeschlagen: {e}"); await send_preview_message(update, context, schwester_code)
-
+                with open(image_paths[next_index], 'rb') as photo_file:
+                    media = InputMediaPhoto(photo_file)
+                    await context.bot.edit_message_media(chat_id, preview_message_id, media, reply_markup=query.message.reply_markup)
+            except error.BadRequest as e:
+                if "message is not modified" not in str(e): logger.warning(f"Bild bearbeiten fehlgeschlagen: {e}"); await send_preview_message(update, context, schwester_code)
+            except Exception as e: logger.error(f"Unerwarteter Fehler bei next_preview: {e}"); await send_preview_message(update, context, schwester_code)
+        else: await send_preview_message(update, context, schwester_code)
     elif data.startswith("select_package:"):
         await cleanup_previous_messages(chat_id, context)
-        try:
-            await query.message.delete()
-        except error.BadRequest:
-            logger.info(f"Message {query.message.message_id} was already deleted.")
-        except Exception as e:
-            logger.warning(f"Could not delete message {query.message.message_id}: {e}")
-            
+        try: await query.message.delete()
+        except error.BadRequest: logger.info(f"Message {query.message.message_id} was already deleted.")
+        except Exception as e: logger.warning(f"Could not delete message {query.message.message_id}: {e}")
         await track_event("package_selected", context, user.id); _, media_type, amount_str = data.split(":"); amount = int(amount_str); base_price = PRICES[media_type][amount]; price = base_price; price_str = f"*{price}€*"; stats = load_stats(); user_data = stats.get("users", {}).get(str(user.id), {}); package_key = f"{media_type}_{amount}"
         if "discounts" in user_data and package_key in user_data["discounts"]: price = max(1, base_price - user_data["discounts"][package_key]); price_str = f"~{base_price}€~ *{price}€* (Exklusiv-Rabatt)"
         elif context.user_data.get('discount_active'): price = max(1, base_price - 1); price_str = f"~{base_price}€~ *{price}€* (Rabatt)"
         text = f"Du hast **{amount} {media_type.capitalize()}** für {price_str} gewählt.\nWie möchtest du bezahlen?"; keyboard = [[InlineKeyboardButton("PayPal", callback_data=f"pay_paypal:{media_type}:{amount}")], [InlineKeyboardButton("Gutschein", callback_data=f"pay_voucher:{media_type}:{amount}")], [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück", callback_data="show_price_options")]]; msg = await context.bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown'); context.user_data["messages_to_delete"] = [msg.message_id]
-    
     elif data.startswith(("pay_", "show_wallet:", "voucher_provider:")):
         parts = data.split(":"); media_type = parts[1]; amount = int(parts[2]); base_price = PRICES[media_type][amount]; price = base_price; stats = load_stats(); user_data = stats.get("users", {}).get(str(user.id), {}); package_key = f"{media_type}_{amount}"
         if "discounts" in user_data and package_key in user_data["discounts"]: price = max(1, base_price - user_data["discounts"][package_key])
@@ -412,8 +416,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         elif data.startswith("voucher_provider:"):
             context.user_data["awaiting_voucher"] = parts[1]; text = f"Sende mir jetzt deinen {parts[1].capitalize()}-Gutschein-Code."
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Abbrechen", callback_data=f"pay_voucher:{media_type}:{amount}")]]))
-            
-# Der Rest des Codes bleibt unverändert...
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if is_user_banned(user.id): return
@@ -499,6 +501,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         await show_admin_menu(update, context)
 async def do_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
     message_to_send = context.user_data.pop('broadcast_message', None)
     context.user_data.pop('admin_awaiting_input', None)
     if not message_to_send: await query.edit_message_text("Fehler: Nachricht nicht gefunden."); return
