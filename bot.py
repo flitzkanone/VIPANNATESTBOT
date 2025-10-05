@@ -129,7 +129,8 @@ async def check_user_status(user_id: int, context: ContextTypes.DEFAULT_TYPE, re
         stats.get("users", {})[user_id_str] = {
             "first_start": now.isoformat(), "last_start": now.isoformat(), "discount_sent": False,
             "preview_clicks": 0, "viewed_sisters": [], "payments_initiated": [], "banned": False,
-            "referrer_id": ref_id, "referrals": [], "successful_referrals": 0, "reward_triggered_for_referrer": False
+            "referrer_id": ref_id, "referrals": [], "successful_referrals": 0, "reward_triggered_for_referrer": False,
+            "paypal_offer_sent": False
         }
         if ref_id and ref_id in stats["users"]: stats["users"][ref_id].setdefault("referrals", []).append(user_id_str)
         save_stats(stats); await update_pinned_summary(context); return "new", True, stats["users"][user_id_str]
@@ -360,8 +361,26 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         pdf_buffer = BytesIO(pdf.output(dest='S').encode('latin-1')); pdf_buffer.seek(0); today_str = datetime.now().strftime("%Y-%m-%d"); await context.bot.send_document(chat_id=chat_id, document=pdf_buffer, filename=f"Gutschein-Report_{today_str}.pdf", caption="Hier ist dein aktueller Gutschein-Report."); return
 
     # --- Main Menu Navigation ---
-    if data in ["show_preview_options", "show_price_options"]:
-        action = "preview" if "preview" in data else "prices"; text = "Für wen interessierst du dich?"; keyboard = [[InlineKeyboardButton("Kleine Schwester", callback_data=f"select_schwester:ks:{action}"), InlineKeyboardButton("Große Schwester", callback_data=f"select_schwester:gs:{action}")], [InlineKeyboardButton("« Zurück", callback_data="main_menu")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    if data == "show_preview_options":
+        text = "Für wen interessierst du dich?"; keyboard = [[InlineKeyboardButton("Kleine Schwester", callback_data=f"select_schwester:ks:preview"), InlineKeyboardButton("Große Schwester", callback_data=f"select_schwester:gs:preview")], [InlineKeyboardButton("« Zurück", callback_data="main_menu")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif data == "show_price_options":
+        stats = load_stats()
+        user_data = stats.get("users", {}).get(str(user.id), {})
+
+        # NEU: Einmalige Benachrichtigung für die 2-für-1-Aktion senden
+        if not user_data.get("paypal_offer_sent"):
+            offer_text = (
+                "🔥 *EXKLUSIVES PAYPAL-ANGEBOT!* 🔥\n\n"
+                "Nur für kurze Zeit: Zahle ein Paket mit PayPal und erhalte ein zweites Paket deiner Wahl "
+                "(zum gleichen oder geringeren Preis) *GRATIS* dazu!\n\n"
+                "Wähle einfach dein erstes Paket aus und bezahle mit PayPal. Kontaktiere anschließend den Admin, um dein Gratis-Paket zu erhalten."
+            )
+            await context.bot.send_message(chat_id=chat_id, text=offer_text, parse_mode='Markdown')
+            stats["users"][str(user.id)]["paypal_offer_sent"] = True
+            save_stats(stats)
+
+        text = "Für wen interessierst du dich?"; keyboard = [[InlineKeyboardButton("Kleine Schwester", callback_data=f"select_schwester:ks:prices"), InlineKeyboardButton("Große Schwester", callback_data=f"select_schwester:gs:prices")], [InlineKeyboardButton("« Zurück", callback_data="main_menu")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("select_schwester:"):
         await cleanup_previous_messages(chat_id, context)
@@ -416,9 +435,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         
         text = f"Du hast das Paket **{amount} {media_type.capitalize()}** für {price_str} ausgewählt.\n\nWie möchtest du bezahlen?"
         
-        # NEU: Hinweis für PayPal-Rabatt hinzufügen, wenn der Basispreis 15€ beträgt
-        if base_price == 15:
-            text += "\n\n💡 *Bezahle mit PayPal und spare 3€!*"
+        # NEU: Hinweis für 2-für-1 Aktion
+        text += "\n\n🔥 *PayPal-Aktion: Kaufe 1, erhalte 2!* 🔥"
 
         keyboard = [[InlineKeyboardButton(" PayPal", callback_data=f"pay_paypal:{media_type}:{amount}")], [InlineKeyboardButton(" Gutschein (Amazon)", callback_data=f"pay_voucher:{media_type}:{amount}")], [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zu den Preisen", callback_data="show_price_options")]]; msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown'); context.user_data["messages_to_delete"] = [msg.message_id]
 
@@ -442,11 +460,29 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if price == -1: price = base_price
 
         if data.startswith("pay_paypal:"):
-            # NEU: PayPal-Sonderangebot, das alle anderen Rabatte für 15€-Pakete überschreibt
-            if base_price == 15:
-                price = 12
+            await track_event("payment_paypal", context, user.id)
+            await update_payment_log("PayPal (2 für 1)", price)
+            
+            # NEU: Admin-Benachrichtigung für 2-für-1-Aktion
+            if NOTIFICATION_GROUP_ID:
+                user_mention = f"[{escape_markdown(user.first_name, version=2)}](tg://user?id={user.id})"
+                admin_notification_text = (
+                    f"💸 *PayPal 2-für-1 Aktion gestartet* 💸\n\n"
+                    f"Nutzer {user_mention} (`{user.id}`) hat die Zahlung für ein Paket über *{price}€* per PayPal eingeleitet.\n\n"
+                    "Bitte halte dich bereit, ihm sein zweites Gratis-Paket freizuschalten, nachdem die Zahlung bestätigt wurde."
+                )
+                await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=admin_notification_text, parse_mode='Markdown')
 
-            await track_event("payment_paypal", context, user.id); await update_payment_log("PayPal", price); paypal_link = f"https://paypal.me/{PAYPAL_USER}/{price}"; text = (f"Super! Klicke auf den Link, um die Zahlung für **{amount} {media_type.capitalize()}** in Höhe von **{price}€** abzuschließen.\n\nGib als Verwendungszweck bitte deinen Telegram-Namen an.\n\n➡️ [Hier sicher bezahlen]({paypal_link})"); keyboard = [[InlineKeyboardButton("« Zurück zur Bezahlwahl", callback_data=f"select_package:{media_type}:{amount}")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown', disable_web_page_preview=True)
+            paypal_link = f"https://paypal.me/{PAYPAL_USER}/{price}"
+            # NEU: Angepasster Text für den Nutzer
+            text = (
+                f"Super! Klicke auf den Link, um die Zahlung für **{amount} {media_type.capitalize()}** in Höhe von **{price}€** abzuschließen.\n\n"
+                f"Gib als Verwendungszweck bitte deinen Telegram-Namen an.\n\n"
+                f"➡️ [Hier sicher bezahlen]({paypal_link})\n\n"
+                "🎉 *Nach der Zahlung melde dich beim Admin, um dein zweites, kostenloses Paket zu erhalten!*"
+            )
+            keyboard = [[InlineKeyboardButton("« Zurück zur Bezahlwahl", callback_data=f"select_package:{media_type}:{amount}")]]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown', disable_web_page_preview=True)
         
         elif data.startswith("pay_voucher:"):
             await track_event("payment_voucher", context, user.id); await update_payment_log("Gutschein", price)
