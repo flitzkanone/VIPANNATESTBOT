@@ -223,6 +223,7 @@ async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await context.bot.send_message(chat_id=chat_id, text="Ups! Ich konnte gerade keine passenden Inhalte finden...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="main_menu")]]))
         return
     
+    start_index = start_index % len(media_paths)
     context.user_data[f'preview_index_{media_type}'] = start_index
     media_to_show_path = media_paths[start_index]
     file_extension = os.path.splitext(media_to_show_path)[1].lower()
@@ -321,7 +322,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await start(update, context)
         return
 
-    # --- Admin Section (unverändert) ---
     if data.startswith("admin_"):
         if str(user.id) != ADMIN_USER_ID:
             await query.answer("⛔️ Keine Berechtigung.", show_alert=True)
@@ -369,7 +369,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         elif data.startswith("admin_preview_increase:"): user_id_to_manage = data.split(":")[1]; await execute_manage_preview_limit(update, context, user_id_to_manage, 'increase')
         return
 
-    # --- Referral Section (unverändert) ---
     elif data == "referral_menu":
         stats = load_stats(); user_data = stats.get("users", {}).get(str(user.id), {})
         referral_count = len(user_data.get("referrals", [])); successful_referrals = user_data.get("successful_referrals", 0)
@@ -377,7 +376,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         text = ("🤝 *Freunde einladen & Belohnung erhalten*\n\n" "Teile deinen persönlichen Link mit Freunden. Wenn sich ein neuer Nutzer über deinen Link anmeldet *und einen Kauf tätigt*, erhältst du eine Belohnung!\n\n" f"🔗 *Dein persönlicher Link:*\n`{ref_link}`\n\n" "💡 *So funktioniert's:*\n" f"Dein Link hat das Format `https://t.me/VIPANNA2008BOT?start=ref_{user.id}`. Jeder, der darauf klickt und den Bot startet, wird dir zugeordnet.\n\n" "📈 *Dein Status:*\n" f"   - Geworbene Freunde: *{referral_count}*\n" f"   - Erfolgreiche Käufe: *{successful_referrals}*")
         keyboard = [[InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown', disable_web_page_preview=True); return
         
-    # --- PDF Download Section (unverändert) ---
     if data == "download_vouchers_pdf":
         await query.answer("PDF wird erstellt..."); vouchers = load_vouchers(); pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=16); pdf.cell(0, 10, "Gutschein Report", ln=True, align='C'); pdf.ln(10); pdf.set_font("Arial", 'B', size=14); pdf.cell(0, 10, "Amazon Gutscheine", ln=True); pdf.set_font("Arial", size=12)
         if vouchers.get("amazon", []):
@@ -385,7 +383,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         else: pdf.cell(0, 8, "Keine vorhanden.", ln=True)
         pdf_buffer = BytesIO(pdf.output(dest='S').encode('latin-1')); pdf_buffer.seek(0); today_str = datetime.now().strftime("%Y-%m-%d"); await context.bot.send_document(chat_id=chat_id, document=pdf_buffer, filename=f"Gutschein-Report_{today_str}.pdf", caption="Hier ist dein aktueller Gutschein-Report."); return
 
-    # --- Main Menu Navigation ---
     if data.startswith("show_preview:"):
         await cleanup_previous_messages(chat_id, context)
         try: await query.message.delete()
@@ -424,7 +421,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             stats["users"][str(user.id)]["paypal_offer_sent"] = True
             save_stats(stats)
             
-        # --- ÄNDERUNG: Suche nach Preis-VIDEOS statt Bildern ---
         media_paths = get_media_files("videos", "preis")
         media_message = None
         
@@ -432,7 +428,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             random_media_path = random.choice(media_paths)
             try:
                 with open(random_media_path, 'rb') as media_file:
-                    # --- ÄNDERUNG: Sende Video statt Foto ---
+                    # --- KORREKTUR: send_video für Ton (Option 1) ---
                     media_message = await context.bot.send_video(chat_id=chat_id, video=media_file, protect_content=True, supports_streaming=True)
             except error.TelegramError as e:
                 logger.error(f"Could not send price video {random_media_path}: {e}")
@@ -440,12 +436,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         caption = "Wähle dein gewünschtes Paket:"
         text_message = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(get_price_keyboard(user.id)))
         
-        # Speichere die IDs beider Nachrichten zum Löschen
         messages_to_delete = [text_message.message_id]
         if media_message:
             messages_to_delete.append(media_message.message_id)
         context.user_data["messages_to_delete"] = messages_to_delete
-
 
     elif data.startswith("next_preview:"):
         stats = load_stats(); user_data = stats.get("users", {}).get(str(user.id), {}); preview_clicks = user_data.get("preview_clicks", 0)
@@ -462,11 +456,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await send_or_update_admin_log(context, user, event_text=f"Nächstes Medium ({media_type.capitalize()})")
         
         media_paths = get_media_files(media_type, "vorschau")
+        if not media_paths: return
+        
         index_key = f'preview_index_{media_type}'; current_index = context.user_data.get(index_key, 0)
-        next_index = (current_index + 1) % len(media_paths) if media_paths else 0
+        next_index = (current_index + 1) % len(media_paths)
         context.user_data[index_key] = next_index
         
-        if not media_paths: return
         media_to_show_path = media_paths[next_index]
         media_message_id = context.user_data.get("messages_to_delete", [None])[0]
 
@@ -490,7 +485,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 logger.warning(f"General error on next_preview, sending new message: {e}")
                 await send_preview_message(update, context, media_type, start_index=next_index)
 
-    # --- Rest des Codes (select_package, Bezahlung, Admin-Funktionen etc.) ist unverändert ---
     elif data.startswith("select_package:"):
         await cleanup_previous_messages(chat_id, context);
         try: await query.message.delete()
@@ -714,7 +708,7 @@ async def handle_admin_user_management_input(update: Update, context: ContextTyp
     verb = "gesperrt" if action == "sperren" else "entsperrt"; await update.message.reply_text(f"✅ Nutzer `{user_id_to_manage}` wurde erfolgreich *{verb}*."); await show_admin_menu(update, context)
 
 async def show_manage_discounts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "💸 *Rabatte verwalten*\n\nHier kannst du aktive, vom Admin vergebenene Rabatte einsehen und löschen."
+    text = "💸 *Rabatte verwalten*\n\nHier kannst du aktive, vom Admin vergebene Rabatte einsehen und löschen."
     keyboard = [[InlineKeyboardButton("🗑️ Alle Rabatte löschen", callback_data="admin_delete_all_discounts_confirm")], [InlineKeyboardButton("👤 Rabatt für Nutzer löschen", callback_data="admin_delete_user_discount_start")], [InlineKeyboardButton("« Zurück zum Admin-Menü", callback_data="admin_main_menu")]]
     await query_or_message_edit(update, text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -727,8 +721,85 @@ async def execute_delete_all_discounts(update: Update, context: ContextTypes.DEF
     text = f"✅ Erfolgreich!\n\nAlle Rabatte von *{cleared_count}* Nutzern wurden entfernt."; await query_or_message_edit(update, text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_manage_discounts")]]))
 
 async def handle_admin_delete_user_discount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['awaiting_user_id_for_discount_deletion'] = False; user_id_to_clear = update.message.text
-    if not user_id_to_clear.isdigit(): await update.message.reply_text("⚠️ Ungültige ID. Bitte gib eine numerische Nutzer-ID ein."); return
-    stats = load_stats(); user_data = stats.get("users", {}).get(user_id_to_clear)
-    if not user_data or "discounts" not in user_data: await update.message.reply_text(f"ℹ️ Nutzer mit ID `{user_id_to_clear}` hat keine aktiven Rabatte."); return
-    text = f"Nutzer `{user_id_to_clear}` hat aktive Rabatte.\n\nSollen diese wirklich gelöscht werden?"; keyboard = [[InlineKeyboardButton("✅ Ja, löschen", callback_data=f"admin_delete_user_discount_execute:{user_id_to_clear}")], [InlineKeyboardButton("❌ Abbrechen", callback_data="admin_manage_discounts")]]; await update.message.reply_text(text, reply_markup=InlineKeyboa
+    context.user_data['awaiting_user_id_for_discount_deletion'] = False
+    user_id_to_clear = update.message.text
+    if not user_id_to_clear.isdigit():
+        await update.message.reply_text("⚠️ Ungültige ID. Bitte gib eine numerische Nutzer-ID ein.")
+        return
+    stats = load_stats()
+    user_data = stats.get("users", {}).get(user_id_to_clear)
+    if not user_data or "discounts" not in user_data:
+        await update.message.reply_text(f"ℹ️ Nutzer mit ID `{user_id_to_clear}` hat keine aktiven Rabatte.")
+        return
+    
+    # --- KORREKTUR: Diese Funktion behebt den Syntax-Fehler ---
+    text = f"Nutzer `{user_id_to_clear}` hat aktive Rabatte.\n\nSollen diese wirklich gelöscht werden?"
+    keyboard = [
+        [InlineKeyboardButton("✅ Ja, löschen", callback_data=f"admin_delete_user_discount_execute:{user_id_to_clear}")],
+        [InlineKeyboardButton("❌ Abbrechen", callback_data="admin_manage_discounts")]
+    ]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def execute_delete_user_discount(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id_to_clear: str):
+    stats = load_stats()
+    if user_id_to_clear in stats["users"] and "discounts" in stats["users"][user_id_to_clear]:
+        del stats["users"][user_id_to_clear]["discounts"]; save_stats(stats); await save_discounts_to_telegram(context)
+        text = f"✅ Rabatte für Nutzer `{user_id_to_clear}` wurden erfolgreich entfernt."; await query_or_message_edit(update, text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_manage_discounts")]]))
+    else: await query_or_message_edit(update, f"ℹ️ Fehler: Nutzer `{user_id_to_clear}` hat keine Rabatte (mehr).", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_manage_discounts")]]))
+
+async def handle_admin_preview_limit_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['awaiting_user_id_for_preview_limit'] = False; user_id_to_manage = update.message.text
+    if not user_id_to_manage.isdigit(): await update.message.reply_text("⚠️ Ungültige ID. Bitte gib eine numerische Nutzer-ID ein."); return
+    stats = load_stats()
+    if user_id_to_manage not in stats["users"]: await update.message.reply_text(f"⚠️ Nutzer mit der ID `{user_id_to_manage}` nicht gefunden."); return
+    current_clicks = stats['users'][user_id_to_manage].get('preview_clicks', 0)
+    text = f"Nutzer `{user_id_to_manage}` hat aktuell *{current_clicks}* Vorschau-Klicks.\n\nWas möchtest du tun?"; keyboard = [[InlineKeyboardButton("Auf 0 zurücksetzen", callback_data=f"admin_preview_reset:{user_id_to_manage}")], [InlineKeyboardButton("Um 25 erhöhen", callback_data=f"admin_preview_increase:{user_id_to_manage}")], [InlineKeyboardButton("❌ Abbrechen", callback_data="admin_user_manage")]]; await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+async def execute_manage_preview_limit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str, action: str):
+    stats = load_stats(); user_data = stats["users"].get(user_id)
+    if not user_data: await query_or_message_edit(update, f"Fehler: Nutzer {user_id} nicht gefunden.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_user_manage")]])); return
+    current_clicks = user_data.get('preview_clicks', 0)
+    if action == 'reset': new_clicks = 0
+    else: new_clicks = current_clicks - 25 if current_clicks > 25 else 0
+    stats["users"][user_id]['preview_clicks'] = new_clicks; save_stats(stats)
+    text = f"✅ Vorschau-Limit für Nutzer `{user_id}` wurde auf *{new_clicks}* Klicks angepasst."; await query_or_message_edit(update, text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_user_manage")]]))
+
+async def process_referral_reward(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    stats = load_stats(); user_id_str = str(user_id); user_data = stats["users"].get(user_id_str, {})
+    if user_data.get("reward_triggered_for_referrer"): return
+    referrer_id = user_data.get("referrer_id")
+    if referrer_id and referrer_id in stats["users"]:
+        stats["users"][user_id_str]["reward_triggered_for_referrer"] = True
+        stats["users"][referrer_id]["successful_referrals"] = stats["users"][referrer_id].get("successful_referrals", 0) + 1
+        reward_discount = {"type": "percent", "value": 60} 
+        stats["users"][referrer_id]["discounts"] = reward_discount; save_stats(stats); await save_discounts_to_telegram(context)
+        reward_text = ("🎉 *Belohnung erhalten!*\n\n" "Ein von dir geworbener Freund hat gerade seinen ersten Kauf getätigt. Als Dankeschön haben wir dir einen exklusiven *60% Rabatt auf ALLES* gutgeschrieben!")
+        try: await context.bot.send_message(chat_id=referrer_id, text=reward_text, parse_mode='Markdown')
+        except (error.Forbidden, error.BadRequest): logger.warning(f"Could not send referral reward notification to user {referrer_id}")
+
+async def query_or_message_edit(update, text, **kwargs):
+    if update.callback_query: await update.callback_query.edit_message_text(text, **kwargs)
+    else: await update.message.reply_text(text, **kwargs)
+
+async def query_or_message_answer(update, text, **kwargs):
+    if update.callback_query: await update.callback_query.answer(text, **kwargs)
+    else: await update.message.reply_text(text, **kwargs)
+
+async def post_init(application: Application):
+    await restore_stats_from_pinned_message(application)
+    await load_discounts_from_telegram(application)
+
+def main() -> None:
+    application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("admin", admin))
+    application.add_handler(CallbackQueryHandler(handle_callback_query))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+
+    if WEBHOOK_URL:
+        port = int(os.environ.get("PORT", 8443)); application.run_webhook(listen="0.0.0.0", port=port, url_path=BOT_TOKEN, webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
+    else:
+        logger.info("Starte Bot im Polling-Modus"); application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
