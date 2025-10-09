@@ -448,12 +448,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             keyboard = [[InlineKeyboardButton("✅ OK", callback_data="confirm_offer_and_show_prices")]]
             try:
                 await query.edit_message_text(offer_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-            except error.BadRequest:
-                # Fallback, falls die Nachricht nicht bearbeitet werden kann (z.B. zu alt)
-                await cleanup_previous_messages(chat_id, context)
-                msg = await context.bot.send_message(chat_id, offer_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-                context.user_data["messages_to_delete"] = [msg.message_id]
-
+            except error.BadRequest as e:
+                if "message is not modified" in str(e): pass
+                else:
+                    logger.error(f"Error editing message for price offer: {e}")
+                    await cleanup_previous_messages(chat_id, context)
+                    msg = await context.bot.send_message(chat_id, offer_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+                    context.user_data["messages_to_delete"] = [msg.message_id]
         else:
             await show_prices_page(update, context)
 
@@ -505,10 +506,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 await send_preview_message(update, context, media_type, start_index=next_index)
     
     elif data.startswith("select_package:"):
-        await cleanup_previous_messages(chat_id, context);
-        try: await query.message.delete()
-        except error.TelegramError: pass
-        await track_event("package_selected", context, user.id); _, media_type, amount_str = data.split(":"); amount = int(amount_str); base_price = PRICES[media_type][amount];
+        await track_event("package_selected", context, user.id)
+        _, media_type, amount_str = data.split(":")
+        amount = int(amount_str)
+        base_price = PRICES[media_type][amount]
         package_key = f"{media_type}_{amount}"
         price = get_discounted_price(base_price, user_data.get("discounts"), package_key)
         if price == -1: price = base_price
@@ -517,7 +518,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         text = f"Du hast das Paket **{amount} {media_type.capitalize()}** für {price_str} ausgewählt.\n\nWie möchtest du bezahlen?"
         text += "\n\n🔥 *PayPal-Aktion: Kaufe 1, erhalte 2!* 🔥"
 
-        keyboard = [[InlineKeyboardButton(" PayPal", callback_data=f"pay_paypal:{media_type}:{amount}")], [InlineKeyboardButton(" Gutschein (Amazon)", callback_data=f"pay_voucher:{media_type}:{amount}")], [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zu den Preisen", callback_data="show_price_options")]]; msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown'); context.user_data["messages_to_delete"] = [msg.message_id]
+        keyboard = [[InlineKeyboardButton(" PayPal", callback_data=f"pay_paypal:{media_type}:{amount}")], [InlineKeyboardButton(" Gutschein (Amazon)", callback_data=f"pay_voucher:{media_type}:{amount}")], [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zu den Preisen", callback_data="show_price_options")]]
+        await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
     async def update_payment_log(payment_method: str, price_val: int):
         stats_log = load_stats(); user_data_log = stats_log.get("users", {}).get(str(user.id))
@@ -589,7 +591,7 @@ def get_price_keyboard(user_id: int):
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if str(update.effective_user.id) != ADMIN_USER_ID: await update.message.reply_text("⛔️ Du hast keine Berechtigung für diesen Befehl."); return
     await show_admin_menu(update, context)
-# ... (Rest der Datei bleibt unverändert) ...
+
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "🔒 *Admin-Menü*\n\nWähle eine Option:"
     keyboard = [[InlineKeyboardButton("📊 Nutzer-Statistiken", callback_data="admin_stats_users"), InlineKeyboardButton("🖱️ Klick-Statistiken", callback_data="admin_stats_clicks")], [InlineKeyboardButton("🎟️ Gutscheine", callback_data="admin_show_vouchers"), InlineKeyboardButton("💸 Rabatt senden", callback_data="admin_discount_start")], [InlineKeyboardButton("👤 Nutzer verwalten", callback_data="admin_user_manage")], [InlineKeyboardButton("💸 Rabatte verwalten", callback_data="admin_manage_discounts")], [InlineKeyboardButton("🔄 Statistiken zurücksetzen", callback_data="admin_reset_stats")]]
@@ -615,7 +617,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         if context.user_data.get('awaiting_user_id_for_entsperren'): await handle_admin_user_management_input(update, context, "entsperren"); return
         if context.user_data.get('awaiting_user_id_for_discount_deletion'): await handle_admin_delete_user_discount_input(update, context); return
         if context.user_data.get('awaiting_user_id_for_preview_limit'): await handle_admin_preview_limit_input(update, context); return
-
     if context.user_data.get("awaiting_voucher"):
         provider = context.user_data.pop("awaiting_voucher")
         code = text_input
@@ -623,8 +624,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         vouchers.setdefault(provider, []).append(code)
         save_vouchers(vouchers)
         notification_text = (f"📬 *Neuer Gutschein erhalten!* 📬\n\n" f"*Anbieter:* {provider.capitalize()}\n" f"*Code:* `{code}`\n" f"*Von Nutzer:* {escape_markdown(user.first_name, version=2)} (`{user.id}`)\n\n" f"⚠️ *AKTION ERFORDERLICH:* Bitte Code prüfen und den Nutzer manuell freischalten.")
-        if NOTIFICATION_GROUP_ID:
-            await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=notification_text, parse_mode='Markdown')
+        if NOTIFICATION_GROUP_ID: await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=notification_text, parse_mode='Markdown')
         await send_or_update_admin_log(context, user, event_text=f"Gutschein '{provider}' eingereicht (wartet auf Prüfung)")
         user_confirmation_text = ("✅ Vielen Dank! Dein Gutschein wurde erfolgreich übermittelt.\n\n" "Die manuelle Überprüfung dauert in der Regel **10-20 Minuten**. " "Sobald dein Code verifiziert ist, melde ich mich bei dir und du erhältst Zugriff auf deine Inhalte. " "Bitte habe einen Moment Geduld.")
         user_confirmation_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]])
@@ -675,7 +675,6 @@ async def finalize_discount_action(update: Update, context: ContextTypes.DEFAULT
         target_id = context.user_data.get('rabatt_target_id')
         if target_id: target_ids.append(target_id)
     if not target_ids: await query_or_message_edit(update, "Fehler: Kein Ziel für den Rabatt gefunden.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_main_menu")]])); return
-    
     discount_type = context.user_data.get('rabatt_type'); final_discount_obj = {"type": f"{discount_type}_packages", "packages": rabatt_data["packages"]}
     success_count = 0; fail_count = 0
     discount_notification_text = ("🎁 DEIN PERSÖNLICHES ANGEBOT! 🎁\n\n" "Wir haben dir gerade einen exklusiven Rabatt auf ausgewählte Pakete gutgeschrieben!\n\n" "Klicke hier, um deine neuen, reduzierten Preise zu sehen und direkt zuzuschlagen:")
