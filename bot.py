@@ -542,13 +542,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await update_payment_log("PayPal (2 für 1)", price)
             
             if NOTIFICATION_GROUP_ID:
-                user_mention = f"[{escape_markdown(user.first_name, version=2)}](tg://user?id={user.id})"
-                admin_notification_text = (
-                    f"💸 *PayPal 2-für-1 Aktion gestartet* 💸\n\n"
-                    f"Nutzer {user_mention} (`{user.id}`) hat die Zahlung für ein Paket über *{price}€* per PayPal eingeleitet.\n\n"
-                    "Bitte halte dich bereit, ihm sein zweites Gratis-Paket freizuschalten, nachdem die Zahlung bestätigt wurde."
-                )
-                await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=admin_notification_text, parse_mode='Markdown')
+                try:
+                    user_mention = f"[{escape_markdown(user.first_name, version=2)}](tg://user?id={user.id})"
+                    admin_notification_text = (
+                        f"💸 *PayPal 2-für-1 Aktion gestartet* 💸\n\n"
+                        f"Nutzer {user_mention} (`{user.id}`) hat die Zahlung für ein Paket über *{price}€* per PayPal eingeleitet.\n\n"
+                        "Bitte halte dich bereit, ihm sein zweites Gratis-Paket freizuschalten, nachdem die Zahlung bestätigt wurde."
+                    )
+                    await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=admin_notification_text, parse_mode='Markdown')
+                except error.BadRequest as e:
+                    logger.error(f"Could not send PayPal notification to group {NOTIFICATION_GROUP_ID}: {e}")
 
             paypal_link = f"https://paypal.me/{PAYPAL_USER}/{price}"
             text = (
