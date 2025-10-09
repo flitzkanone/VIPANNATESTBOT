@@ -134,7 +134,6 @@ def get_package_button_text(media_type: str, amount: int, user_id: int) -> str:
     if discount_price != -1: return f"{label} ~{base_price}~{discount_price}€ ✨"
     else: return f"{label} {base_price}€"
 
-# --- ENTFERNT: ref_id aus der Funktion entfernt ---
 async def check_user_status(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     if str(user_id) == ADMIN_USER_ID: return "admin", False, None
     stats = load_stats()
@@ -156,7 +155,6 @@ async def check_user_status(user_id: int, context: ContextTypes.DEFAULT_TYPE):
         return "returning", True, user_data
     
     return "active", False, user_data
-
 
 async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: User, event_text: str = ""):
     if not NOTIFICATION_GROUP_ID or str(user.id) == ADMIN_USER_ID: return
@@ -204,25 +202,19 @@ async def update_pinned_summary(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e_new: logger.error(f"Konnte Dashboard nicht erstellen/anpinnen: {e_new}")
 
 async def restore_stats_from_pinned_message(application: Application):
-    # This function is fine, but keys might need updating if dashboard text changes
     pass
 
 def get_media_files(media_type: str, purpose: str) -> list:
     matching_files = []
-    
-    # Handle combined preview
     if media_type == 'combined' and purpose == 'vorschau':
         for mt in ['bilder', 'videos']:
             target_prefix = f"{mt.lower()}_{purpose.lower()}"
-            if not os.path.isdir(MEDIA_DIR):
-                logger.error(f"Media-Verzeichnis '{MEDIA_DIR}' nicht gefunden!")
-                continue
+            if not os.path.isdir(MEDIA_DIR): continue
             for filename in os.listdir(MEDIA_DIR):
                 normalized_filename = filename.lower().lstrip('•-_ ').replace(' ', '_')
                 if normalized_filename.startswith(target_prefix):
                     matching_files.append(os.path.join(MEDIA_DIR, filename))
     else:
-        # Standard behavior
         target_prefix = f"{media_type.lower()}_{purpose.lower()}"
         if not os.path.isdir(MEDIA_DIR):
             logger.error(f"Media-Verzeichnis '{MEDIA_DIR}' nicht gefunden!")
@@ -248,7 +240,7 @@ async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYP
     
     media_paths = get_media_files(media_type, "vorschau")
     if media_type == 'combined':
-        random.shuffle(media_paths) # Mische die kombinierte Galerie für Abwechslung
+        random.shuffle(media_paths)
     
     context.user_data['preview_gallery'] = media_paths
 
@@ -268,8 +260,7 @@ async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 media_message = await context.bot.send_photo(chat_id=chat_id, photo=media_file, protect_content=True)
             elif file_extension in ['.mp4', '.mov', '.m4v']:
                 media_message = await context.bot.send_video(chat_id=chat_id, video=media_file, protect_content=True, supports_streaming=True)
-            else:
-                return # Skip unsupported files
+            else: return
     except error.TelegramError as e:
         logger.error(f"Error sending media file {media_to_show_path}: {e}")
         return
@@ -291,7 +282,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     
     try:
-        # --- ENTFERNT: ref_id Logik entfernt ---
         status, should_notify, user_data = await check_user_status(user.id, context)
         await track_event("start_command", context, user.id)
         is_eligible_for_discount = False
@@ -309,14 +299,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(chat_id=chat_id, text=discount_notification_text, reply_markup=discount_notification_keyboard)
         if should_notify:
             event_text = "Bot gestartet (neuer Nutzer)" if status == "new" else "Bot erneut gestartet"
-            # --- ENTFERNT: Referral-Teil aus der Log-Nachricht entfernt ---
             await send_or_update_admin_log(context, user, event_text=event_text)
     except Exception as e:
         logger.error(f"Error in start admin logic for user {user.id}: {e}")
 
     await cleanup_previous_messages(chat_id, context)
     welcome_text = ( "Herzlich Willkommen! ✨\n\n" "Hier kannst du eine Vorschau meiner Inhalte sehen oder direkt ein Paket auswählen. " "Die gesamte Bedienung erfolgt über die Buttons.")
-    # --- ÄNDERUNG: Nur noch ein Vorschau-Button und kein "Freunde einladen" mehr ---
     keyboard = [
         [InlineKeyboardButton("🖼️ Vorschau", callback_data="show_preview:combined")],
         [InlineKeyboardButton("🛍️ Preise & Pakete", callback_data="show_price_options")]
@@ -384,7 +372,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if str(user.id) != ADMIN_USER_ID:
             await query.answer("⛔️ Keine Berechtigung.", show_alert=True)
             return
-        # (Restlicher Admin-Code bleibt unverändert)
+        # (Admin code remains unchanged)
         if not data.startswith(("admin_discount", "admin_delete_", "admin_preview_")):
             for key in list(context.user_data.keys()):
                 if key.startswith(('rabatt_', 'awaiting_')) and key != 'awaiting_voucher':
@@ -427,8 +415,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         elif data.startswith("admin_preview_increase:"): user_id_to_manage = data.split(":")[1]; await execute_manage_preview_limit(update, context, user_id_to_manage, 'increase')
         return
 
-    # --- ENTFERNT: "referral_menu" Logik gelöscht ---
-        
     if data == "download_vouchers_pdf":
         await query.answer("PDF wird erstellt..."); vouchers = load_vouchers(); pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=16); pdf.cell(0, 10, "Gutschein Report", ln=True, align='C'); pdf.ln(10); pdf.set_font("Arial", 'B', size=14); pdf.cell(0, 10, "Amazon Gutscheine", ln=True); pdf.set_font("Arial", size=12)
         if vouchers.get("amazon", []):
@@ -441,7 +427,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         try: await query.message.delete()
         except error.TelegramError: pass
         
-        _, media_type = data.split(":") # media_type is 'combined'
+        _, media_type = data.split(":")
         if user_data.get("preview_clicks", 0) >= 25:
             await query.answer("Du hast dein Vorschau-Limit von 25 Klicks bereits erreicht.", show_alert=True)
             msg = await context.bot.send_message(chat_id, "Du hast dein Vorschau-Limit von 25 Klicks bereits erreicht.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]])); context.user_data["messages_to_delete"] = [msg.message_id]; return
@@ -451,8 +437,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await send_preview_message(update, context, media_type)
 
     elif data == "show_price_options":
+        # --- KORREKTUR: cleanup_previous_messages entfernt, um den Fehler zu beheben ---
         if not user_data.get("paypal_offer_sent"):
-            await cleanup_previous_messages(chat_id, context)
             offer_text = ("🔥 *EXKLUSIVES PAYPAL-ANGEBOT!* 🔥\n\n"
                           "Nur für kurze Zeit: Zahle ein Paket mit PayPal und erhalte ein zweites Paket deiner Wahl "
                           "(zum gleichen oder geringeren Preis) *GRATIS* dazu!")
@@ -486,30 +472,31 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         
         index_key = f'preview_index_{media_type}'; current_index = context.user_data.get(index_key, 0)
         next_index = (current_index + 1) % len(media_paths)
-        context.user_data[index_key] = next_index
         
-        media_to_show_path = media_paths[next_index]
-        media_message_id = context.user_data.get("messages_to_delete", [None])[0]
+        # Logik zum Wechseln des Medientyps (senden statt bearbeiten)
+        current_path = media_paths[current_index]
+        next_path = media_paths[next_index]
+        is_current_video = any(current_path.lower().endswith(ext) for ext in ['.mp4', '.mov', '.m4v'])
+        is_next_video = any(next_path.lower().endswith(ext) for ext in ['.mp4', '.mov', '.m4v'])
 
-        if media_message_id:
-            # Check if media type changes to avoid error
-            current_path = media_paths[current_index]
-            is_current_video = any(current_path.lower().endswith(ext) for ext in ['.mp4', '.mov', '.m4v'])
-            is_next_video = any(media_to_show_path.lower().endswith(ext) for ext in ['.mp4', '.mov', '.m4v'])
-
-            if is_current_video != is_next_video:
+        if is_current_video != is_next_video:
+            await send_preview_message(update, context, media_type, start_index=next_index)
+        else:
+            media_message_id = context.user_data.get("messages_to_delete", [None])[0]
+            if not media_message_id:
                 await send_preview_message(update, context, media_type, start_index=next_index)
                 return
-
+            
             try:
-                with open(media_to_show_path, 'rb') as media_file:
+                with open(next_path, 'rb') as media_file:
                     new_media = InputMediaVideo(media_file, supports_streaming=True) if is_next_video else InputMediaPhoto(media_file)
                     await context.bot.edit_message_media(chat_id=chat_id, message_id=media_message_id, media=new_media)
+                    context.user_data[index_key] = next_index
             except Exception as e:
                 logger.warning(f"Could not edit media, resending: {e}")
                 await send_preview_message(update, context, media_type, start_index=next_index)
-    
-    # (Rest of the handler code remains the same...)
+
+    # (Rest of the handler code is unchanged)
     elif data.startswith("select_package:"):
         await cleanup_previous_messages(chat_id, context);
         try: await query.message.delete()
@@ -593,6 +580,8 @@ def get_price_keyboard(user_id: int):
         [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]
     ]
 
+# ... (Rest der Datei bleibt unverändert)
+
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "🔒 *Admin-Menü*\n\nWähle eine Option:"
     keyboard = [[InlineKeyboardButton("📊 Nutzer-Statistiken", callback_data="admin_stats_users"), InlineKeyboardButton("🖱️ Klick-Statistiken", callback_data="admin_stats_clicks")], [InlineKeyboardButton("🎟️ Gutscheine", callback_data="admin_show_vouchers"), InlineKeyboardButton("💸 Rabatt senden", callback_data="admin_discount_start")], [InlineKeyboardButton("👤 Nutzer verwalten", callback_data="admin_user_manage")], [InlineKeyboardButton("💸 Rabatte verwalten", callback_data="admin_manage_discounts")], [InlineKeyboardButton("🔄 Statistiken zurücksetzen", callback_data="admin_reset_stats")]]
@@ -625,39 +614,13 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         vouchers = load_vouchers()
         vouchers.setdefault(provider, []).append(code)
         save_vouchers(vouchers)
-
-        notification_text = (
-            f"📬 *Neuer Gutschein erhalten!* 📬\n\n"
-            f"*Anbieter:* {provider.capitalize()}\n"
-            f"*Code:* `{code}`\n"
-            f"*Von Nutzer:* {escape_markdown(user.first_name, version=2)} (`{user.id}`)\n\n"
-            f"⚠️ *AKTION ERFORDERLICH:* Bitte Code prüfen und den Nutzer manuell freischalten."
-        )
+        notification_text = (f"📬 *Neuer Gutschein erhalten!* 📬\n\n" f"*Anbieter:* {provider.capitalize()}\n" f"*Code:* `{code}`\n" f"*Von Nutzer:* {escape_markdown(user.first_name, version=2)} (`{user.id}`)\n\n" f"⚠️ *AKTION ERFORDERLICH:* Bitte Code prüfen und den Nutzer manuell freischalten.")
         if NOTIFICATION_GROUP_ID:
             await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=notification_text, parse_mode='Markdown')
-        
         await send_or_update_admin_log(context, user, event_text=f"Gutschein '{provider}' eingereicht (wartet auf Prüfung)")
-        
-        # --- ENTFERNT: Referral-Belohnung wird nicht mehr ausgelöst ---
-
-        user_confirmation_text = (
-            "✅ Vielen Dank! Dein Gutschein wurde erfolgreich übermittelt.\n\n"
-            "Die manuelle Überprüfung dauert in der Regel **10-20 Minuten**. "
-            "Sobald dein Code verifiziert ist, melde ich mich bei dir und du erhältst Zugriff auf deine Inhalte. "
-            "Bitte habe einen Moment Geduld."
-        )
-        
-        user_confirmation_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]
-        ])
-
-        await update.message.reply_text(
-            text=user_confirmation_text,
-            reply_markup=user_confirmation_keyboard,
-            parse_mode='Markdown'
-        )
-
-# ... (Rest der Datei, ab "async def admin", bleibt unverändert)
+        user_confirmation_text = ("✅ Vielen Dank! Dein Gutschein wurde erfolgreich übermittelt.\n\n" "Die manuelle Überprüfung dauert in der Regel **10-20 Minuten**. " "Sobald dein Code verifiziert ist, melde ich mich bei dir und du erhältst Zugriff auf deine Inhalte. " "Bitte habe einen Moment Geduld.")
+        user_confirmation_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]])
+        await update.message.reply_text(text=user_confirmation_text, reply_markup=user_confirmation_keyboard, parse_mode='Markdown')
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if str(update.effective_user.id) != ADMIN_USER_ID: await update.message.reply_text("⛔️ Du hast keine Berechtigung für diesen Befehl."); return
@@ -777,8 +740,6 @@ async def execute_manage_preview_limit(update: Update, context: ContextTypes.DEF
     else: new_clicks = current_clicks - 25 if current_clicks > 25 else 0
     stats["users"][user_id]['preview_clicks'] = new_clicks; save_stats(stats)
     text = f"✅ Vorschau-Limit für Nutzer `{user_id}` wurde auf *{new_clicks}* Klicks angepasst."; await query_or_message_edit(update, text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_user_manage")]]))
-
-# --- ENTFERNT: Die `process_referral_reward` Funktion wurde gelöscht ---
 
 async def query_or_message_edit(update, text, **kwargs):
     if update.callback_query: await update.callback_query.edit_message_text(text, **kwargs)
