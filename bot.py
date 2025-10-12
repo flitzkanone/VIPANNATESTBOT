@@ -72,13 +72,11 @@ def ensure_user_in_stats(user_id: int, stats: dict) -> dict:
             "preview_clicks": 0,
             "payments_initiated": [],
             "banned": False,
-            "paypal_offer_sent": False,
-            "roulette_played": False 
+            "paypal_offer_sent": False
         }
         save_stats(stats)
     return stats
-
-# ... (Rest der oberen Hilfsfunktionen bleibt gleich) ...
+    
 async def save_discounts_to_telegram(context: ContextTypes.DEFAULT_TYPE):
     if not NOTIFICATION_GROUP_ID: return
     stats = load_stats(); discounts_to_save = {}
@@ -96,18 +94,18 @@ async def save_discounts_to_telegram(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e: logger.error(f"Could not create a new discount persistence message: {e}")
 
 async def load_discounts_from_telegram(application: Application):
-    if not NOTIFICATION_GROUP_ID: logger.info("No notification group ID, skipping discount restore."); return
-    logger.info("Attempting to restore discounts from Telegram message..."); stats = load_stats(); discount_message_id = stats.get("discount_message_id")
-    if not discount_message_id: logger.warning("No discount message ID in stats.json. Cannot restore discounts."); return
+    if not NOTIFICATION_GROUP_ID: return
     try:
+        stats = load_stats()
+        discount_message_id = stats.get("discount_message_id")
+        if not discount_message_id: return
         message = await application.bot.get_message(chat_id=NOTIFICATION_GROUP_ID, message_id=discount_message_id)
         json_match = re.search(r'<tg-spoiler>(.*)</tg-spoiler>', message.text_html, re.DOTALL)
-        if not json_match: logger.error("Could not find spoiler tag in discount message."); return
+        if not json_match: return
         discounts_data = json.loads(json_match.group(1)); users_updated = 0
         for user_id, discounts in discounts_data.items():
             if user_id in stats["users"]: stats["users"][user_id]["discounts"] = discounts; users_updated += 1
         if users_updated > 0: save_stats(stats); logger.info(f"Successfully restored discounts for {users_updated} users.")
-        else: logger.info("No discounts found in the persistence message to restore.")
     except Exception as e: logger.error(f"An unexpected error occurred during discount restore: {e}")
 
 async def track_event(event_name: str, context: ContextTypes.DEFAULT_TYPE, user_id: int):
@@ -142,50 +140,44 @@ async def check_user_status(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     if str(user_id) == ADMIN_USER_ID: return "admin", False, None
     stats = load_stats()
     user_id_str = str(user_id)
-    is_new_user = user_id_str not in stats.get("users", {})
+    now = datetime.now()
     
-    if is_new_user:
+    if user_id_str not in stats.get("users", {}):
         stats = ensure_user_in_stats(user_id, stats)
         await update_pinned_summary(context)
         return "new", True, stats["users"][user_id_str]
 
     user_data = stats["users"][user_id_str]
     last_start_dt = datetime.fromisoformat(user_data.get("last_start"))
-    now = datetime.now()
-
+    
+    stats["users"][user_id_str]["last_start"] = now.isoformat()
+    save_stats(stats)
+    
     if now - last_start_dt > timedelta(hours=24):
-        stats["users"][user_id_str]["last_start"] = now.isoformat()
-        save_stats(stats)
         return "returning", True, user_data
     
     return "active", False, user_data
 
 async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: User, event_text: str = ""):
     if not NOTIFICATION_GROUP_ID or str(user.id) == ADMIN_USER_ID: return
-    user_id_str = str(user.id); stats = load_stats(); admin_logs = stats.get("admin_logs", {}); user_data = stats.get("users", {}).get(user_id_str, {}); log_message_id = admin_logs.get(user_id_str, {}).get("message_id")
-    user_mention = f"[{escape_markdown(user.first_name, version=2)}](tg://user?id={user.id})"; discount_emoji = "💸" if user_data.get("discount_sent") or "discounts" in user_data else ""; banned_emoji = "🚫" if user_data.get("banned") else ""
-    first_start_str = "N/A"
-    if user_data.get("first_start"): first_start_str = datetime.fromisoformat(user_data["first_start"]).strftime('%Y-%m-%d %H:%M')
-    preview_clicks = user_data.get("preview_clicks", 0); payments = user_data.get("payments_initiated", []); payments_str = "\n".join(f"   • {p}" for p in payments) if payments else "   • Keine"
-    base_text = (f"👤 *Nutzer-Aktivität* {discount_emoji}{banned_emoji}\n\n" f"*Nutzer:* {user_mention} (`{user.id}`)\n" f"*Erster Start:* `{first_start_str}`\n\n" f"🖼️ *Vorschau-Klicks:* {preview_clicks}/25\n\n" f"💰 *Bezahlversuche*\n{payments_str}")
-    final_text = f"{base_text}\n\n`Letzte Aktion: {event_text}`".strip()
     try:
+        user_id_str = str(user.id); stats = load_stats(); admin_logs = stats.get("admin_logs", {}); user_data = stats.get("users", {}).get(user_id_str, {}); log_message_id = admin_logs.get(user_id_str, {}).get("message_id")
+        user_mention = f"[{escape_markdown(user.first_name, version=2)}](tg://user?id={user.id})"; discount_emoji = "💸" if user_data.get("discount_sent") or "discounts" in user_data else ""; banned_emoji = "🚫" if user_data.get("banned") else ""
+        first_start_str = "N/A"
+        if user_data.get("first_start"): first_start_str = datetime.fromisoformat(user_data["first_start"]).strftime('%Y-%m-%d %H:%M')
+        preview_clicks = user_data.get("preview_clicks", 0); payments = user_data.get("payments_initiated", []); payments_str = "\n".join(f"   • {p}" for p in payments) if payments else "   • Keine"
+        base_text = (f"👤 *Nutzer-Aktivität* {discount_emoji}{banned_emoji}\n\n" f"*Nutzer:* {user_mention} (`{user.id}`)\n" f"*Erster Start:* `{first_start_str}`\n\n" f"🖼️ *Vorschau-Klicks:* {preview_clicks}/25\n\n" f"💰 *Bezahlversuche*\n{payments_str}")
+        final_text = f"{base_text}\n\n`Letzte Aktion: {event_text}`".strip()
         if log_message_id: await context.bot.edit_message_text(chat_id=NOTIFICATION_GROUP_ID, message_id=log_message_id, text=final_text, parse_mode='Markdown')
         else:
             sent_message = await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=final_text, parse_mode='Markdown')
             admin_logs.setdefault(user_id_str, {})["message_id"] = sent_message.message_id; stats["admin_logs"] = admin_logs; save_stats(stats)
     except error.BadRequest as e:
-        if "chat not found" in str(e).lower():
-            logger.warning(f"Admin log group '{NOTIFICATION_GROUP_ID}' not found. Cannot send log for user {user.id}.")
-        elif "message to edit not found" in str(e):
-            logger.warning(f"Admin log for user {user.id} not found (ID: {log_message_id}). Sending a new one.")
-            try:
-                sent_message = await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=final_text, parse_mode='Markdown')
-                admin_logs.setdefault(user_id_str, {})["message_id"] = sent_message.message_id; stats["admin_logs"] = admin_logs; save_stats(stats)
-            except Exception as e_new: logger.error(f"Failed to send replacement admin log for user {user.id}: {e_new}")
+        if "chat not found" in str(e).lower(): logger.warning(f"Admin log group '{NOTIFICATION_GROUP_ID}' not found.")
+        elif "message to edit not found" in str(e): logger.warning(f"Admin log for user {user.id} not found.")
         else: logger.error(f"BadRequest on admin log for user {user.id}: {e}")
     except error.TelegramError as e:
-        if 'message is not modified' not in str(e): logger.warning(f"Temporary error updating admin log for user {user.id} (ID: {log_message_id}): {e}")
+        if 'message is not modified' not in str(e): logger.warning(f"Temporary error updating admin log for user {user.id}: {e}")
 
 async def update_pinned_summary(context: ContextTypes.DEFAULT_TYPE):
     if not NOTIFICATION_GROUP_ID: return
@@ -210,8 +202,7 @@ async def update_pinned_summary(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.pin_chat_message(chat_id=NOTIFICATION_GROUP_ID, message_id=sent_message.message_id, disable_notification=True)
         except Exception as e_new: logger.error(f"Konnte Dashboard nicht erstellen/anpinnen: {e_new}")
 
-async def restore_stats_from_pinned_message(application: Application):
-    pass
+async def restore_stats_from_pinned_message(application: Application): pass
 
 def get_media_files(media_type: str, purpose: str) -> list:
     matching_files = []
@@ -221,40 +212,36 @@ def get_media_files(media_type: str, purpose: str) -> list:
             if not os.path.isdir(MEDIA_DIR): continue
             for filename in os.listdir(MEDIA_DIR):
                 normalized_filename = filename.lower().lstrip('•-_ ').replace(' ', '_')
-                if normalized_filename.startswith(target_prefix):
-                    matching_files.append(os.path.join(MEDIA_DIR, filename))
+                if normalized_filename.startswith(target_prefix): matching_files.append(os.path.join(MEDIA_DIR, filename))
     else:
         target_prefix = f"{media_type.lower()}_{purpose.lower()}"
-        if not os.path.isdir(MEDIA_DIR):
-            logger.error(f"Media-Verzeichnis '{MEDIA_DIR}' nicht gefunden!")
-            return []
+        if not os.path.isdir(MEDIA_DIR): return []
         for filename in os.listdir(MEDIA_DIR):
             normalized_filename = filename.lower().lstrip('•-_ ').replace(' ', '_')
-            if normalized_filename.startswith(target_prefix):
-                matching_files.append(os.path.join(MEDIA_DIR, filename))
-
+            if normalized_filename.startswith(target_prefix): matching_files.append(os.path.join(MEDIA_DIR, filename))
     matching_files.sort()
     return matching_files
 
-async def cleanup_previous_messages(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
-    if "messages_to_delete" in context.user_data:
-        for msg_id in context.user_data["messages_to_delete"]:
-            try: await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except error.TelegramError: pass
-        context.user_data["messages_to_delete"] = []
+async def cleanup_bot_messages(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+    if context.chat_data:
+        for key in ['main_message_id', 'countdown_timer_msg_id', 'countdown_buttons_msg_id', 'control_message_id']:
+            msg_id = context.chat_data.pop(key, None)
+            if msg_id:
+                try: await context.bot.delete_message(chat_id, msg_id)
+                except error.TelegramError: pass
 
 async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYPE, media_type: str, start_index: int = 0):
-    await cleanup_previous_messages(update.effective_chat.id, context)
+    await cleanup_bot_messages(update.effective_chat.id, context)
     chat_id = update.effective_chat.id
     
     media_paths = get_media_files(media_type, "vorschau")
-    if media_type == 'combined':
-        random.shuffle(media_paths)
+    if media_type == 'combined': random.shuffle(media_paths)
     
     context.user_data['preview_gallery'] = media_paths
 
     if not media_paths:
-        await context.bot.send_message(chat_id=chat_id, text="Ups! Ich konnte gerade keine passenden Inhalte finden...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="main_menu")]]))
+        msg = await context.bot.send_message(chat_id=chat_id, text="Ups! Ich konnte gerade keine passenden Inhalte finden...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="main_menu")]]))
+        context.chat_data['main_message_id'] = msg.message_id
         return
     
     start_index = start_index % len(media_paths)
@@ -270,6 +257,7 @@ async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYP
             elif file_extension in ['.mp4', '.mov', '.m4v']:
                 media_message = await context.bot.send_video(chat_id=chat_id, video=media_file, protect_content=True, supports_streaming=True)
             else: return
+        context.chat_data['main_message_id'] = media_message.message_id
     except error.TelegramError as e:
         logger.error(f"Error sending media file {media_to_show_path}: {e}")
         return
@@ -282,8 +270,8 @@ async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("🛍️ Zu den Preisen", callback_data="show_price_options")],
         [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]
     ]
-    text_message = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard_buttons))
-    context.user_data["messages_to_delete"] = [media_message.message_id, text_message.message_id]
+    control_message = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard_buttons))
+    context.chat_data['control_message_id'] = control_message.message_id
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user; chat_id = update.effective_chat.id
@@ -293,28 +281,44 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     
     try:
+        if update.message:
+            await context.bot.delete_message(chat_id, update.message.message_id)
+    except error.TelegramError: pass
+
+    try:
+        stats_before = load_stats()
+        user_data_before = stats_before.get("users", {}).get(str(user.id))
+        last_start_before = user_data_before.get("last_start") if user_data_before else None
+
         status, should_notify, user_data = await check_user_status(user.id, context)
         await track_event("start_command", context, user.id)
-        is_eligible_for_discount = False
-        if user_data and not user_data.get("discount_sent") and "discounts" not in user_data:
-            first_start_dt = datetime.fromisoformat(user_data.get("first_start"))
-            if datetime.now() - first_start_dt > timedelta(hours=2):
-                is_eligible_for_discount = True; stats = load_stats()
-                stats["users"][str(user.id)]["discounts"] = {"type": "percent", "value": 20}
+
+        if last_start_before and not user_data.get("discount_sent"):
+            last_start_dt = datetime.fromisoformat(last_start_before)
+            if datetime.now() - last_start_dt > timedelta(minutes=15):
+                stats = load_stats()
+                stats["users"][str(user.id)]["discounts"] = {"type": "percent", "value": 10}
                 stats["users"][str(user.id)]["discount_sent"] = True
-                save_stats(stats); await save_discounts_to_telegram(context)
-                await send_or_update_admin_log(context, user, event_text="20% Rabatt (Inaktivität >2h)")
-        if is_eligible_for_discount:
-            discount_notification_text = ("🎁 DEIN PERSÖNLICHES ANGEBOT! 🎁\n\n" "Wir haben dir gerade einen exklusiven 20% Rabatt auf alle Pakete gutgeschrieben!\n\n" "Klicke hier, um deine neuen, reduzierten Preise zu sehen und direkt zuzuschlagen:")
-            discount_notification_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("💸 Zu meinen exklusiven Preisen 💸", callback_data="show_price_options")]])
-            await context.bot.send_message(chat_id=chat_id, text=discount_notification_text, reply_markup=discount_notification_keyboard)
+                save_stats(stats)
+                await save_discounts_to_telegram(context)
+                
+                discount_notification_text = ("🎁 Wir haben dich vermisst! 🎁\n\n"
+                                              "Als Willkommensgruß erhältst du einen exklusiven **10% Rabatt** auf alle Pakete!\n\n"
+                                              "PLUS: Unser **2-für-1 PayPal-Angebot** gilt weiterhin für dich. Nutze die Chance!")
+                discount_notification_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("💸 Zu meinen exklusiven Preisen 💸", callback_data="show_price_options")]])
+                await cleanup_bot_messages(chat_id, context)
+                msg = await context.bot.send_message(chat_id=chat_id, text=discount_notification_text, reply_markup=discount_notification_keyboard, parse_mode='Markdown')
+                context.chat_data['main_message_id'] = msg.message_id
+                return
+
         if should_notify:
             event_text = "Bot gestartet (neuer Nutzer)" if status == "new" else "Bot erneut gestartet"
             await send_or_update_admin_log(context, user, event_text=event_text)
+            
     except Exception as e:
         logger.error(f"Error in start admin logic for user {user.id}: {e}")
 
-    await cleanup_previous_messages(chat_id, context)
+    await cleanup_bot_messages(chat_id, context)
     welcome_text = ( "Herzlich Willkommen! ✨\n\n" "Hier kannst du eine Vorschau meiner Inhalte sehen oder direkt ein Paket auswählen. " "Die gesamte Bedienung erfolgt über die Buttons.")
     keyboard = [
         [InlineKeyboardButton("🖼️ Vorschau", callback_data="show_preview:combined")],
@@ -322,21 +326,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    if update.callback_query:
-        query = update.callback_query; await query.answer()
-        try: await query.edit_message_text(welcome_text, reply_markup=reply_markup)
+    if update.callback_query and query.message:
+        try:
+            await query.edit_message_text(welcome_text, reply_markup=reply_markup)
+            context.chat_data['main_message_id'] = query.message.message_id
         except error.TelegramError:
-            try: await query.delete_message()
-            except Exception: pass
-            msg = await context.bot.send_message(chat_id=chat_id, text=welcome_text, reply_markup=reply_markup); context.user_data["messages_to_delete"] = [msg.message_id]
+            msg = await context.bot.send_message(chat_id=chat_id, text=welcome_text, reply_markup=reply_markup)
+            context.chat_data['main_message_id'] = msg.message_id
     else:
-        if update.message is None: return
-        msg = await update.message.reply_text(welcome_text, reply_markup=reply_markup); context.user_data["messages_to_delete"] = [msg.message_id]
+        msg = await context.bot.send_message(chat_id=chat_id, text=welcome_text, reply_markup=reply_markup)
+        context.chat_data['main_message_id'] = msg.message_id
 
-async def show_prices_page(update: Update, context: ContextTypes.DEFAULT_TYPE, with_roulette_option: bool = False):
+async def show_prices_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user = update.effective_user
-    await cleanup_previous_messages(chat_id, context)
+    await cleanup_bot_messages(chat_id, context)
     
     await track_event("prices_viewed", context, user.id)
     await send_or_update_admin_log(context, user, event_text="Schaut sich die Preise an")
@@ -353,19 +357,15 @@ async def show_prices_page(update: Update, context: ContextTypes.DEFAULT_TYPE, w
             logger.error(f"Could not send price video {random_media_path}: {e}")
 
     caption = "Wähle dein gewünschtes Paket:"
-    
     keyboard = get_price_keyboard(user.id)
-    if with_roulette_option:
-        keyboard.insert(0, [InlineKeyboardButton("🎰 Zweite Chance Roulette spielen", callback_data="play_roulette")])
-
-    text_message = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard))
     
-    messages_to_delete = [text_message.message_id]
     if media_message:
-        messages_to_delete.append(media_message.message_id)
-    context.user_data["messages_to_delete"] = messages_to_delete
+        await context.bot.edit_message_caption(chat_id=chat_id, message_id=media_message.message_id, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard))
+        context.chat_data['main_message_id'] = media_message.message_id
+    else:
+        msg = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard))
+        context.chat_data['main_message_id'] = msg.message_id
 
-# --- Countdown & Roulette Functions ---
 def get_emoji_time(seconds: int) -> str:
     digits = {"0": "0️⃣", "1": "1️⃣", "2": "2️⃣", "3": "3️⃣", "4": "4️⃣", "5": "5️⃣", "6": "6️⃣", "7": "7️⃣", "8": "8️⃣", "9": "9️⃣"}
     s_str = f"{max(0, seconds):02d}"
@@ -407,15 +407,14 @@ async def end_countdown(context: ContextTypes.DEFAULT_TYPE) -> None:
     job_data = context.job.data
     if context.chat_data:
         context.chat_data.pop(f'countdown_job_{job_data["chat_id"]}', None)
+        timer_msg_id = context.chat_data.pop(f'countdown_timer_msg_id_{job_data["chat_id"]}', None)
+        if timer_msg_id:
+            try:
+                await context.bot.delete_message(job_data["chat_id"], timer_msg_id)
+            except error.TelegramError:
+                pass
     
     try:
-        await context.bot.edit_message_text(
-            chat_id=job_data["chat_id"],
-            message_id=job_data["timer_message_id"],
-            text="⌛️ **ANGEBOT ABGELAUFEN** ⌛️",
-            parse_mode='Markdown'
-        )
-        
         text = (f"Du hast das Paket **{job_data['amount']} {job_data['media_type'].capitalize()}** für {job_data['price_str']} ausgewählt.\n\n"
                 "Das exklusive Angebot ist leider abgelaufen.\nWie möchtest du bezahlen?")
         keyboard = [
@@ -434,7 +433,6 @@ async def end_countdown(context: ContextTypes.DEFAULT_TYPE) -> None:
     except error.BadRequest as e:
         logger.warning(f"Could not finalize expired countdown for chat {job_data['chat_id']}: {e}")
 
-# --- Main Handler Function ---
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -450,14 +448,18 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("Du bist von der Nutzung dieses Bots ausgeschlossen.", show_alert=True)
         return
 
-    if not data.startswith(("pay_", "play_roulette")):
+    if not data.startswith("pay_"):
         if context.chat_data:
             job_name = context.chat_data.pop(f'countdown_job_{chat_id}', None)
             if job_name:
                 jobs = context.job_queue.get_jobs_by_name(job_name)
                 for job in jobs:
                     job.schedule_removal()
-
+                timer_msg_id = context.chat_data.pop(f'countdown_timer_msg_id_{chat_id}', None)
+                if timer_msg_id:
+                    try: await context.bot.delete_message(chat_id, timer_msg_id)
+                    except error.TelegramError: pass
+    
     if data == "main_menu":
         await start(update, context)
         return
@@ -466,7 +468,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if str(user.id) != ADMIN_USER_ID:
             await query.answer("⛔️ Keine Berechtigung.", show_alert=True)
             return
-        # (Admin code remains unchanged...)
+        # (Admin-Code hier, unverändert)
         if not data.startswith(("admin_discount", "admin_delete_", "admin_preview_")):
             for key in list(context.user_data.keys()):
                 if key.startswith(('rabatt_', 'awaiting_')) and key != 'awaiting_voucher':
@@ -519,60 +521,25 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         _, media_type = data.split(":")
         if user_data.get("preview_clicks", 0) >= 25:
             await query.answer("Du hast dein Vorschau-Limit von 25 Klicks bereits erreicht.", show_alert=True)
-            await cleanup_previous_messages(chat_id, context)
-            msg = await context.bot.send_message(chat_id, "Du hast dein Vorschau-Limit von 25 Klicks bereits erreicht.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]])); context.user_data["messages_to_delete"] = [msg.message_id]; return
-        
-        await cleanup_previous_messages(chat_id, context)
-        try: await query.message.delete()
-        except error.TelegramError: pass
+            return
         
         await track_event(f"preview_{media_type}", context, user.id)
         await send_or_update_admin_log(context, user, event_text="Schaut sich Vorschau an")
         await send_preview_message(update, context, media_type)
 
     elif data == "show_price_options":
-        if not user_data.get("paypal_offer_sent"):
-            # This logic is now handled in 'select_package'
-            await show_prices_page(update, context, with_roulette_option=False)
-        else:
-            await show_prices_page(update, context, with_roulette_option=not user_data.get("roulette_played"))
+        await show_prices_page(update, context)
 
-    elif data == "play_roulette":
-        await query.message.delete()
-        stats["users"][str(user.id)]["roulette_played"] = True
-        save_stats(stats)
-        
-        animation_emojis = ['⚫️', '🔴', '🟢', '🎡', '🎰']
-        msg = await context.bot.send_message(chat_id, "🎡 Roulette dreht sich...")
-        
-        for i in range(12):
-            await asyncio.sleep(0.25)
-            frame = random.choice(animation_emojis)
-            try:
-                await context.bot.edit_message_text(chat_id, msg.message_id, f"🎡 {frame} 🎡")
-            except error.BadRequest: return
-        
-        final_emoji = '🟢' # Always win
-        
-        await asyncio.sleep(0.5)
-        await context.bot.edit_message_text(chat_id, msg.message_id, f"✅ Ergebnis: {final_emoji}")
-        await asyncio.sleep(2)
-
-        await context.bot.edit_message_text(chat_id, msg.message_id, "🎉 **GEWONNEN!** 🎉\n\nDu erhältst **10% Rabatt** auf alle Pakete!")
-        stats = load_stats()
-        stats["users"][str(user.id)]["discounts"] = {"type": "percent", "value": 10}
-        save_stats(stats)
-        await save_discounts_to_telegram(context)
-        
-        await asyncio.sleep(3)
-        await show_prices_page(update, context, with_roulette_option=False)
-        
     elif data.startswith("next_preview:"):
+        if 'control_message_id' in context.chat_data:
+            try: await context.bot.delete_message(chat_id, context.chat_data.pop('control_message_id'))
+            except error.TelegramError: pass
+        
         if user_data.get("preview_clicks", 0) >= 25:
-            await query.answer("Vorschau-Limit erreicht!", show_alert=True); await cleanup_previous_messages(chat_id, context)
+            await query.answer("Vorschau-Limit erreicht!", show_alert=True); await cleanup_bot_messages(chat_id, context)
             limit_text = "Du hast dein Vorschau-Limit von 25 Klicks erreicht. Sieh dir jetzt die Preise an, um mehr zu sehen!"
             limit_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(f"🛍️ Preise ansehen", callback_data="show_price_options")], [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]])
-            msg = await context.bot.send_message(chat_id, text=limit_text, reply_markup=limit_keyboard); context.user_data["messages_to_delete"] = [msg.message_id]; return
+            msg = await context.bot.send_message(chat_id, text=limit_text, reply_markup=limit_keyboard); context.chat_data['main_message_id'] = msg.message_id; return
         
         stats["users"][str(user.id)]["preview_clicks"] = user_data.get("preview_clicks", 0) + 1
         save_stats(stats)
@@ -592,19 +559,24 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         is_current_video = any(current_path.lower().endswith(ext) for ext in ['.mp4', '.mov', '.m4v'])
         is_next_video = any(next_path.lower().endswith(ext) for ext in ['.mp4', '.mov', '.m4v'])
 
-        if is_current_video != is_next_video:
+        media_message_id = context.chat_data.get("main_message_id")
+        if not media_message_id or is_current_video != is_next_video:
             await send_preview_message(update, context, media_type, start_index=next_index)
         else:
-            media_message_id = context.user_data.get("messages_to_delete", [None])[0]
-            if not media_message_id:
-                await send_preview_message(update, context, media_type, start_index=next_index)
-                return
-            
             try:
                 with open(next_path, 'rb') as media_file:
                     new_media = InputMediaVideo(media_file, supports_streaming=True) if is_next_video else InputMediaPhoto(media_file)
                     await context.bot.edit_message_media(chat_id=chat_id, message_id=media_message_id, media=new_media)
                     context.user_data[index_key] = next_index
+                    base_caption = PREVIEW_CAPTION
+                    caption = base_caption.format(age_anna=AGE_ANNA)
+                    keyboard_buttons = [
+                        [InlineKeyboardButton("🖼️ Nächstes Medium", callback_data=f"next_preview:{media_type}")],
+                        [InlineKeyboardButton("🛍️ Zu den Preisen", callback_data="show_price_options")],
+                        [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]
+                    ]
+                    control_message = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard_buttons))
+                    context.chat_data['control_message_id'] = control_message.message_id
             except Exception as e:
                 logger.warning(f"Could not edit media, resending: {e}")
                 await send_preview_message(update, context, media_type, start_index=next_index)
@@ -619,9 +591,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if price == -1: price = base_price
         price_str = f"~{base_price}€~ *{price}€* (Rabatt)" if price != base_price else f"*{price}€*"
 
-        await cleanup_previous_messages(chat_id, context)
-        try: await query.message.delete()
-        except error.TelegramError: pass
+        await cleanup_bot_messages(chat_id, context)
         
         if not user_data.get("paypal_offer_sent"):
             end_time = datetime.now() + timedelta(seconds=30)
@@ -639,6 +609,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             job_name = f'countdown_{chat_id}_{buttons_msg.message_id}'
             context.chat_data[f'countdown_job_{chat_id}'] = job_name
             context.chat_data[f'countdown_timer_msg_id_{chat_id}'] = timer_msg.message_id
+            context.chat_data[f'countdown_buttons_msg_id_{chat_id}'] = buttons_msg.message_id
 
             job_data = {
                 "chat_id": chat_id, "timer_message_id": timer_msg.message_id, "buttons_message_id": buttons_msg.message_id,
@@ -652,7 +623,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             text = f"Du hast das Paket **{amount} {media_type.capitalize()}** für {price_str} ausgewählt.\n\nWie möchtest du bezahlen?"
             keyboard = [[InlineKeyboardButton(" PayPal", callback_data=f"pay_paypal:{media_type}:{amount}")], [InlineKeyboardButton(" Gutschein (Amazon)", callback_data=f"pay_voucher:{media_type}:{amount}")], [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zu den Preisen", callback_data="show_price_options")]]
-            await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+            msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+            context.chat_data['main_message_id'] = msg.message_id
 
     async def update_payment_log(payment_method: str, price_val: int):
         stats_log = load_stats(); user_data_log = stats_log.get("users", {}).get(str(user.id))
@@ -697,6 +669,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             text = (f"Super! Klicke auf den Link, um die Zahlung für **{amount} {media_type.capitalize()}** in Höhe von **{price}€** abzuschließen.\n\n" f"Gib als Verwendungszweck bitte deinen Telegram-Namen an.\n\n" f"➡️ [Hier sicher bezahlen]({paypal_link})")
             keyboard = [[InlineKeyboardButton("« Zurück zur Paketauswahl", callback_data="show_price_options")]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown', disable_web_page_preview=True)
+            context.chat_data['main_message_id'] = query.message.message_id
         
         elif data.startswith("pay_voucher:"):
             await track_event("payment_voucher", context, user.id); await update_payment_log("Gutschein", price)
@@ -704,9 +677,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             text = "Bitte sende mir jetzt deinen Amazon-Gutschein-Code als einzelne Nachricht."
             keyboard = [[InlineKeyboardButton("Abbrechen", callback_data="show_price_options")]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+            context.chat_data['main_message_id'] = query.message.message_id
         
         elif data.startswith("pay_crypto:"):
             await track_event("payment_crypto", context, user.id); await update_payment_log("Krypto", price); text = "Bitte wähle die gewünschte Kryptowährung:"; keyboard = [[InlineKeyboardButton("Bitcoin (BTC)", callback_data=f"show_wallet:btc:{media_type}:{amount}"), InlineKeyboardButton("Ethereum (ETH)", callback_data=f"show_wallet:eth:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zur Paketauswahl", callback_data="show_price_options")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+            context.chat_data['main_message_id'] = query.message.message_id
 
     elif data.startswith("show_wallet:"):
         _, crypto_type, media_type, amount_str = data.split(":")
