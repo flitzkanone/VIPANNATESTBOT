@@ -25,6 +25,8 @@ from telegram.helpers import escape_markdown
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PAYPAL_USER = os.getenv("PAYPAL_USER")
+# NEU: Webhook URL wird wieder verwendet
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
 NOTIFICATION_GROUP_ID = os.getenv("NOTIFICATION_GROUP_ID")
 
@@ -326,10 +328,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    if update.callback_query and query.message:
+    if update.callback_query and update.callback_query.message:
         try:
-            await query.edit_message_text(welcome_text, reply_markup=reply_markup)
-            context.chat_data['main_message_id'] = query.message.message_id
+            await update.callback_query.edit_message_text(welcome_text, reply_markup=reply_markup)
+            context.chat_data['main_message_id'] = update.callback_query.message.message_id
         except error.TelegramError:
             msg = await context.bot.send_message(chat_id=chat_id, text=welcome_text, reply_markup=reply_markup)
             context.chat_data['main_message_id'] = msg.message_id
@@ -885,7 +887,19 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handle_callback_query))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
-    logger.info("Starte Bot im Polling-Modus"); application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # NEU: Flexible Startmethode basierend auf WEBHOOK_URL
+    if WEBHOOK_URL:
+        port = int(os.environ.get("PORT", 8443))
+        logger.info(f"Starting bot in webhook mode on port {port}")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=BOT_TOKEN,
+            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
+        )
+    else:
+        logger.info("Starting bot in polling mode")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
