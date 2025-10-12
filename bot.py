@@ -25,7 +25,6 @@ from telegram.helpers import escape_markdown
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PAYPAL_USER = os.getenv("PAYPAL_USER")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
 NOTIFICATION_GROUP_ID = os.getenv("NOTIFICATION_GROUP_ID")
 
@@ -76,7 +75,7 @@ def ensure_user_in_stats(user_id: int, stats: dict) -> dict:
         }
         save_stats(stats)
     return stats
-    
+
 async def save_discounts_to_telegram(context: ContextTypes.DEFAULT_TYPE):
     if not NOTIFICATION_GROUP_ID: return
     stats = load_stats(); discounts_to_save = {}
@@ -224,7 +223,7 @@ def get_media_files(media_type: str, purpose: str) -> list:
 
 async def cleanup_bot_messages(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     if context.chat_data:
-        for key in ['main_message_id', 'countdown_timer_msg_id', 'countdown_buttons_msg_id', 'control_message_id']:
+        for key in ['main_message_id', 'control_message_id', 'countdown_buttons_msg_id']:
             msg_id = context.chat_data.pop(key, None)
             if msg_id:
                 try: await context.bot.delete_message(chat_id, msg_id)
@@ -283,7 +282,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         if update.message:
             await context.bot.delete_message(chat_id, update.message.message_id)
-    except error.TelegramError: pass
+    except error.TelegramError:
+        pass
 
     try:
         stats_before = load_stats()
@@ -365,7 +365,8 @@ async def show_prices_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         msg = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard))
         context.chat_data['main_message_id'] = msg.message_id
-
+    
+# --- Countdown & Roulette Functions ---
 def get_emoji_time(seconds: int) -> str:
     digits = {"0": "0️⃣", "1": "1️⃣", "2": "2️⃣", "3": "3️⃣", "4": "4️⃣", "5": "5️⃣", "6": "6️⃣", "7": "7️⃣", "8": "8️⃣", "9": "9️⃣"}
     s_str = f"{max(0, seconds):02d}"
@@ -433,6 +434,7 @@ async def end_countdown(context: ContextTypes.DEFAULT_TYPE) -> None:
     except error.BadRequest as e:
         logger.warning(f"Could not finalize expired countdown for chat {job_data['chat_id']}: {e}")
 
+# --- Main Handler Function ---
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -456,8 +458,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 for job in jobs:
                     job.schedule_removal()
                 timer_msg_id = context.chat_data.pop(f'countdown_timer_msg_id_{chat_id}', None)
+                buttons_msg_id = context.chat_data.pop(f'countdown_buttons_msg_id_{chat_id}', None)
                 if timer_msg_id:
                     try: await context.bot.delete_message(chat_id, timer_msg_id)
+                    except error.TelegramError: pass
+                if buttons_msg_id:
+                    try: await context.bot.delete_message(chat_id, buttons_msg_id)
                     except error.TelegramError: pass
     
     if data == "main_menu":
@@ -468,7 +474,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if str(user.id) != ADMIN_USER_ID:
             await query.answer("⛔️ Keine Berechtigung.", show_alert=True)
             return
-        # (Admin-Code hier, unverändert)
+        # (Admin code remains unchanged)
         if not data.startswith(("admin_discount", "admin_delete_", "admin_preview_")):
             for key in list(context.user_data.keys()):
                 if key.startswith(('rabatt_', 'awaiting_')) and key != 'awaiting_voucher':
@@ -532,7 +538,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif data.startswith("next_preview:"):
         if 'control_message_id' in context.chat_data:
-            try: await context.bot.delete_message(chat_id, context.chat_data.pop('control_message_id'))
+            try:
+                await context.bot.delete_message(chat_id, context.chat_data.pop('control_message_id'))
             except error.TelegramError: pass
         
         if user_data.get("preview_clicks", 0) >= 25:
@@ -704,7 +711,8 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if str(update.effective_user.id) != ADMIN_USER_ID: await update.message.reply_text("⛔️ Du hast keine Berechtigung für diesen Befehl."); return
     await show_admin_menu(update, context)
 
-# ... (Rest der Datei bleibt unverändert)
+# (Restliche Admin- und Hilfsfunktionen bleiben unverändert)
+# ...
 
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "🔒 *Admin-Menü*\n\nWähle eine Option:"
@@ -877,10 +885,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handle_callback_query))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
-    if WEBHOOK_URL:
-        port = int(os.environ.get("PORT", 8443)); application.run_webhook(listen="0.0.0.0", port=port, url_path=BOT_TOKEN, webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
-    else:
-        logger.info("Starte Bot im Polling-Modus"); application.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("Starte Bot im Polling-Modus"); application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
