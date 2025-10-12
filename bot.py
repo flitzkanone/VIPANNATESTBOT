@@ -21,7 +21,7 @@ from telegram.ext import (
 )
 from telegram.helpers import escape_markdown
 
-# --- Konfiguration ---
+# --- Configuration ---
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PAYPAL_USER = os.getenv("PAYPAL_USER")
@@ -30,7 +30,7 @@ ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
 NOTIFICATION_GROUP_ID = os.getenv("NOTIFICATION_GROUP_ID")
 
 AGE_ANNA = os.getenv("AGE_ANNA", "18") 
-PREVIEW_CAPTION = os.getenv("PREVIEW_CAPTION", "Hier ist eine Vorschau. Ich bin {age_anna} Jahre alt. Klicke auf 'Nächstes Medium' für mehr.")
+PREVIEW_CAPTION = os.getenv("PREVIEW_CAPTION", "Here is a preview. I am {age_anna} years old. Click 'Next Medium' for more.")
 
 BTC_WALLET = "1FcgMLNBDLiuDSDip7AStuP19sq47LJB12"
 ETH_WALLET = "0xeeb8FDc4aAe71B53934318707d0e9747C5c66f6e"
@@ -44,7 +44,7 @@ DISCOUNT_MSG_HEADER = "--- BOT DISCOUNT DATA (DO NOT DELETE) ---"
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Hilfsfunktionen ---
+# --- Helper Functions ---
 def load_vouchers():
     try:
         with open(VOUCHER_FILE, "r") as f: return json.load(f)
@@ -72,12 +72,13 @@ def ensure_user_in_stats(user_id: int, stats: dict) -> dict:
             "preview_clicks": 0,
             "payments_initiated": [],
             "banned": False,
-            "paypal_offer_sent": False
+            "paypal_offer_sent": False,
+            "roulette_played": False # New flag for roulette
         }
         save_stats(stats)
     return stats
 
-# --- Rabatt-Persistenz ---
+# ... (Rest of the helper functions, discount persistence, etc. remain the same) ...
 async def save_discounts_to_telegram(context: ContextTypes.DEFAULT_TYPE):
     if not NOTIFICATION_GROUP_ID: return
     stats = load_stats(); discounts_to_save = {}
@@ -327,7 +328,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message is None: return
         msg = await update.message.reply_text(welcome_text, reply_markup=reply_markup); context.user_data["messages_to_delete"] = [msg.message_id]
 
-async def show_prices_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_prices_page(update: Update, context: ContextTypes.DEFAULT_TYPE, with_roulette_option: bool = False):
     chat_id = update.effective_chat.id
     user = update.effective_user
     await cleanup_previous_messages(chat_id, context)
@@ -347,35 +348,51 @@ async def show_prices_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Could not send price video {random_media_path}: {e}")
 
     caption = "Wähle dein gewünschtes Paket:"
-    text_message = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(get_price_keyboard(user.id)))
+    
+    keyboard = get_price_keyboard(user.id)
+    if with_roulette_option:
+        # Füge den Roulette-Button oben ein
+        keyboard.insert(0, [InlineKeyboardButton("🎰 Zweite Chance Roulette spielen", callback_data="play_roulette")])
+
+    text_message = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard))
     
     messages_to_delete = [text_message.message_id]
     if media_message:
         messages_to_delete.append(media_message.message_id)
     context.user_data["messages_to_delete"] = messages_to_delete
 
-# --- NEUE Countdown Hilfsfunktionen ---
+# --- Countdown & Roulette Functions ---
 def get_emoji_time(seconds: int) -> str:
-    """Konvertiert Sekunden in einen Emoji-String wie 1️⃣﹕5️⃣."""
     digits = {"0": "0️⃣", "1": "1️⃣", "2": "2️⃣", "3": "3️⃣", "4": "4️⃣", "5": "5️⃣", "6": "6️⃣", "7": "7️⃣", "8": "8️⃣", "9": "9️⃣"}
     s_str = f"{max(0, seconds):02d}"
     return f"{digits[s_str[0]]}﹕{digits[s_str[1]]}"
+
+def get_progress_bar(seconds_left: int, total_seconds: int = 30) -> str:
+    total_blocks = 10
+    percentage_left = max(0, seconds_left) / total_seconds
+    green_blocks = round(percentage_left * total_blocks)
+    red_blocks = total_blocks - green_blocks
+    return '🟩' * green_blocks + '🟥' * red_blocks
 
 async def update_countdown(context: ContextTypes.DEFAULT_TYPE) -> None:
     job_data = context.job.data
     remaining_seconds = int((job_data["end_time"] - datetime.now()).total_seconds())
     
     if remaining_seconds < 0:
-        return # end_countdown kümmert sich darum
+        return
 
-    emoji_time_str = get_emoji_time(remaining_seconds)
-    text = f"⏰ Dein Angebot endet in: {emoji_time_str}"
+    progress_bar = get_progress_bar(remaining_seconds)
+    emoji_time = get_emoji_time(remaining_seconds)
+    text = (f"🚨 **ZEITLICH BEGRENZTES ANGEBOT** 🚨\n\n"
+            f"{progress_bar}\n\n"
+            f"Endet in: {emoji_time}")
     
     try:
         await context.bot.edit_message_text(
             chat_id=job_data["chat_id"],
             message_id=job_data["timer_message_id"],
-            text=text
+            text=text,
+            parse_mode='Markdown'
         )
     except error.BadRequest as e:
         if "message is not modified" not in str(e):
@@ -390,7 +407,8 @@ async def end_countdown(context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.edit_message_text(
             chat_id=job_data["chat_id"],
             message_id=job_data["timer_message_id"],
-            text="⌛️ Angebot abgelaufen!"
+            text="⌛️ **ANGEBOT ABGELAUFEN** ⌛️",
+            parse_mode='Markdown'
         )
         
         text = (f"Du hast das Paket **{job_data['amount']} {job_data['media_type'].capitalize()}** für {job_data['price_str']} ausgewählt.\n\n"
@@ -411,7 +429,7 @@ async def end_countdown(context: ContextTypes.DEFAULT_TYPE) -> None:
     except error.BadRequest as e:
         logger.warning(f"Could not finalize expired countdown for chat {job_data['chat_id']}: {e}")
 
-# --- Haupt-Handler Funktion ---
+# --- Main Handler Function ---
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -427,24 +445,24 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("Du bist von der Nutzung dieses Bots ausgeschlossen.", show_alert=True)
         return
 
-    # Countdown-Jobs stoppen, wenn eine Aktion ausgeführt wird
-    job_name = context.chat_data.get(f'countdown_job_{chat_id}')
-    if job_name:
-        jobs = context.job_queue.get_jobs_by_name(job_name)
-        if jobs:
+    # Stop countdown jobs if a different action is taken
+    if not data.startswith(("pay_", "play_roulette")):
+        job_name = context.chat_data.pop(f'countdown_job_{chat_id}', None)
+        if job_name:
+            jobs = context.job_queue.get_jobs_by_name(job_name)
             for job in jobs:
                 job.schedule_removal()
-            context.chat_data.pop(f'countdown_job_{chat_id}')
 
     if data == "main_menu":
         await start(update, context)
         return
-
+    
+    # (The admin section remains unchanged)
     if data.startswith("admin_"):
         if str(user.id) != ADMIN_USER_ID:
             await query.answer("⛔️ Keine Berechtigung.", show_alert=True)
             return
-        # (Admin code remains unchanged...)
+        # (Restlicher Admin-Code hier)
         if not data.startswith(("admin_discount", "admin_delete_", "admin_preview_")):
             for key in list(context.user_data.keys()):
                 if key.startswith(('rabatt_', 'awaiting_')) and key != 'awaiting_voucher':
@@ -509,26 +527,36 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await send_preview_message(update, context, media_type)
 
     elif data == "show_price_options":
-        if not user_data.get("paypal_offer_sent"):
-            offer_text = ("🔥 *EXKLUSIVES PAYPAL-ANGEBOT!* 🔥\n\n"
-                          "Nur für kurze Zeit: Zahle ein Paket mit PayPal und erhalte ein zweites Paket deiner Wahl "
-                          "(zum gleichen oder geringeren Preis) *GRATIS* dazu!")
-            keyboard = [[InlineKeyboardButton("✅ OK", callback_data="confirm_offer_and_show_prices")]]
-            try:
-                await query.edit_message_text(offer_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-            except error.BadRequest as e:
-                if "message is not modified" in str(e): pass
-                else:
-                    logger.error(f"Error editing message for price offer: {e}")
-                    await cleanup_previous_messages(chat_id, context)
-                    msg = await context.bot.send_message(chat_id, offer_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-                    context.user_data["messages_to_delete"] = [msg.message_id]
+        # If the 2-for-1 offer has been seen (or missed), show the roulette option
+        if user_data.get("paypal_offer_sent") and not user_data.get("roulette_played"):
+            await show_prices_page(update, context, with_roulette_option=True)
         else:
             await show_prices_page(update, context)
 
-    elif data == "confirm_offer_and_show_prices":
-        stats["users"][str(user.id)]["paypal_offer_sent"] = True
+    elif data == "play_roulette":
+        await query.message.delete()
+        stats["users"][str(user.id)]["roulette_played"] = True
         save_stats(stats)
+        
+        animation_frames = ["🎰", "🎲", "🎯", "🎁", "❌"]
+        msg = await context.bot.send_message(chat_id, "Roulette dreht...")
+        
+        for i in range(10): # Animate for a few seconds
+            await asyncio.sleep(0.2)
+            await context.bot.edit_message_text(chat_id, msg.message_id, f"Roulette dreht... {random.choice(animation_frames)}")
+        
+        # 80% win chance
+        if random.random() < 0.8:
+            await asyncio.sleep(1)
+            await context.bot.edit_message_text(chat_id, msg.message_id, "🎉 **GEWONNEN!** 🎉\n\nDu erhältst **10% Rabatt** auf alle Pakete!")
+            stats["users"][str(user.id)]["discounts"] = {"type": "percent", "value": 10}
+            save_stats(stats)
+            await save_discounts_to_telegram(context)
+        else:
+            await asyncio.sleep(1)
+            await context.bot.edit_message_text(chat_id, msg.message_id, "😕 **Verloren!** 😕\n\nLeider kein Rabatt dieses Mal. Viel Glück beim nächsten Mal!")
+
+        # Show prices again after roulette
         await show_prices_page(update, context)
 
     elif data.startswith("next_preview:"):
@@ -587,29 +615,39 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         try: await query.message.delete()
         except error.TelegramError: pass
         
-        end_time = datetime.now() + timedelta(seconds=30)
-        keyboard = [[InlineKeyboardButton("🔥 PayPal (2 für 1 Angebot) 🔥", callback_data=f"pay_paypal:{media_type}:{amount}")], [InlineKeyboardButton(" Gutschein (Amazon)", callback_data=f"pay_voucher:{media_type}:{amount}")], [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zu den Preisen", callback_data="show_price_options")]]
-        
-        timer_msg = await context.bot.send_message(chat_id=chat_id, text=f"⏰ Dein Angebot endet in: {get_emoji_time(30)}")
-        
-        buttons_text = (f"Du hast das Paket **{amount} {media_type.capitalize()}** für {price_str} ausgewählt.\n\n"
-                        "Wie möchtest du bezahlen?")
-        buttons_msg = await context.bot.send_message(chat_id=chat_id, text=buttons_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-        
-        job_name = f'countdown_{chat_id}_{buttons_msg.message_id}'
-        context.chat_data[f'countdown_job_{chat_id}'] = job_name
+        # --- Countdown for the 2-for-1 offer ---
+        if not user_data.get("paypal_offer_sent"):
+            end_time = datetime.now() + timedelta(seconds=30)
+            keyboard = [[InlineKeyboardButton("🔥 PayPal (2 für 1 Angebot) 🔥", callback_data=f"pay_paypal:{media_type}:{amount}")], [InlineKeyboardButton(" Gutschein (Amazon)", callback_data=f"pay_voucher:{media_type}:{amount}")], [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zu den Preisen", callback_data="show_price_options")]]
+            
+            timer_text = (f"🚨 **ZEITLICH BEGRENZTES ANGEBOT** 🚨\n\n"
+                          f"{get_progress_bar(30)}\n\n"
+                          f"Endet in: {get_emoji_time(30)}")
+            timer_msg = await context.bot.send_message(chat_id=chat_id, text=timer_text, parse_mode='Markdown')
+            
+            buttons_text = (f"Du hast das Paket **{amount} {media_type.capitalize()}** für {price_str} ausgewählt.\n\n"
+                            "Wähle deine Bezahlmethode:")
+            buttons_msg = await context.bot.send_message(chat_id=chat_id, text=buttons_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+            
+            job_name = f'countdown_{chat_id}_{buttons_msg.message_id}'
+            context.chat_data[f'countdown_job_{chat_id}'] = job_name
+            context.chat_data[f'countdown_timer_msg_id_{chat_id}'] = timer_msg.message_id
 
-        job_data = {
-            "chat_id": chat_id,
-            "timer_message_id": timer_msg.message_id,
-            "buttons_message_id": buttons_msg.message_id,
-            "end_time": end_time,
-            "amount": amount,
-            "media_type": media_type,
-            "price_str": price_str
-        }
-        context.job_queue.run_repeating(update_countdown, interval=5, first=5, data=job_data, name=job_name)
-        context.job_queue.run_once(end_countdown, when=30, data=job_data, name=job_name)
+            job_data = {
+                "chat_id": chat_id, "timer_message_id": timer_msg.message_id, "buttons_message_id": buttons_msg.message_id,
+                "end_time": end_time, "amount": amount, "media_type": media_type, "price_str": price_str
+            }
+            context.job_queue.run_repeating(update_countdown, interval=3, first=3, data=job_data, name=job_name)
+            context.job_queue.run_once(end_countdown, when=30, data=job_data, name=job_name)
+            
+            # Mark the offer as 'seen'
+            stats["users"][str(user.id)]["paypal_offer_sent"] = True
+            save_stats(stats)
+        else:
+            # Regular payment options if offer is missed
+            text = f"Du hast das Paket **{amount} {media_type.capitalize()}** für {price_str} ausgewählt.\n\nWie möchtest du bezahlen?"
+            keyboard = [[InlineKeyboardButton(" PayPal", callback_data=f"pay_paypal:{media_type}:{amount}")], [InlineKeyboardButton(" Gutschein (Amazon)", callback_data=f"pay_voucher:{media_type}:{amount}")], [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zu den Preisen", callback_data="show_price_options")]]
+            await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
     async def update_payment_log(payment_method: str, price_val: int):
         stats_log = load_stats(); user_data_log = stats_log.get("users", {}).get(str(user.id))
@@ -620,14 +658,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await send_or_update_admin_log(context, user, event_text=f"Bezahlmethode '{payment_method}' für {price_val}€ gewählt")
 
     if data.startswith(("pay_paypal:", "pay_voucher:", "pay_crypto:")):
-        # Stop any active countdown jobs before proceeding
         job_name = context.chat_data.pop(f'countdown_job_{chat_id}', None)
         if job_name:
             jobs = context.job_queue.get_jobs_by_name(job_name)
             for job in jobs:
                 job.schedule_removal()
-        # You might want to delete or edit the timer message here
-        # For now, we'll just let it expire or be cleaned up later.
+            timer_msg_id = context.chat_data.pop(f'countdown_timer_msg_id_{chat_id}', None)
+            if timer_msg_id:
+                try: await context.bot.delete_message(chat_id=chat_id, message_id=timer_msg_id)
+                except error.BadRequest: pass
         
         _, media_type, amount_str = data.split(":")
         amount = int(amount_str)
@@ -638,18 +677,18 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
         if data.startswith("pay_paypal:"):
             await track_event("payment_paypal", context, user.id)
-            await update_payment_log("PayPal (2 für 1)", price)
+            await update_payment_log("PayPal", price)
             
             if NOTIFICATION_GROUP_ID:
                 try:
                     user_mention = f"[{escape_markdown(user.first_name, version=2)}](tg://user?id={user.id})"
-                    admin_notification_text = (f"💸 *PayPal 2-für-1 Aktion gestartet* 💸\n\n" f"Nutzer {user_mention} (`{user.id}`) hat die Zahlung für ein Paket über *{price}€* per PayPal eingeleitet.\n\n" "Bitte halte dich bereit, ihm sein zweites Gratis-Paket freizuschalten, nachdem die Zahlung bestätigt wurde.")
+                    admin_notification_text = (f"💸 *PayPal-Zahlung eingeleitet* 💸\n\n" f"Nutzer {user_mention} (`{user.id}`) hat die Zahlung für ein Paket über *{price}€* per PayPal eingeleitet.")
                     await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=admin_notification_text, parse_mode='Markdown')
                 except error.BadRequest as e:
                     logger.error(f"Could not send PayPal notification to group {NOTIFICATION_GROUP_ID}: {e} - Is the Bot in the group?")
 
             paypal_link = f"https://paypal.me/{PAYPAL_USER}/{price}"
-            text = (f"Super! Klicke auf den Link, um die Zahlung für **{amount} {media_type.capitalize()}** in Höhe von **{price}€** abzuschließen.\n\n" f"Gib als Verwendungszweck bitte deinen Telegram-Namen an.\n\n" f"➡️ [Hier sicher bezahlen]({paypal_link})\n\n" "🎉 *Nach der Zahlung melde dich beim Admin, um dein zweites, kostenloses Paket zu erhalten!*")
+            text = (f"Super! Klicke auf den Link, um die Zahlung für **{amount} {media_type.capitalize()}** in Höhe von **{price}€** abzuschließen.\n\n" f"Gib als Verwendungszweck bitte deinen Telegram-Namen an.\n\n" f"➡️ [Hier sicher bezahlen]({paypal_link})")
             keyboard = [[InlineKeyboardButton("« Zurück zur Paketauswahl", callback_data="show_price_options")]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown', disable_web_page_preview=True)
         
@@ -680,12 +719,11 @@ def get_price_keyboard(user_id: int):
         [InlineKeyboardButton(get_package_button_text("bilder", 35, user_id), callback_data="select_package:bilder:35"), InlineKeyboardButton(get_package_button_text("videos", 35, user_id), callback_data="select_package:videos:35")],
         [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]
     ]
+# ... (Rest of the file remains unchanged)
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if str(update.effective_user.id) != ADMIN_USER_ID: await update.message.reply_text("⛔️ Du hast keine Berechtigung für diesen Befehl."); return
     await show_admin_menu(update, context)
-
-# ... (Rest of the file remains unchanged)
 
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "🔒 *Admin-Menü*\n\nWähle eine Option:"
