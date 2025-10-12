@@ -354,6 +354,64 @@ async def show_prices_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
         messages_to_delete.append(media_message.message_id)
     context.user_data["messages_to_delete"] = messages_to_delete
 
+# --- NEUE Countdown Hilfsfunktionen ---
+def get_emoji_time(seconds: int) -> str:
+    """Konvertiert Sekunden in einen Emoji-String wie 1️⃣﹕5️⃣."""
+    digits = {"0": "0️⃣", "1": "1️⃣", "2": "2️⃣", "3": "3️⃣", "4": "4️⃣", "5": "5️⃣", "6": "6️⃣", "7": "7️⃣", "8": "8️⃣", "9": "9️⃣"}
+    s_str = f"{max(0, seconds):02d}"
+    return f"{digits[s_str[0]]}﹕{digits[s_str[1]]}"
+
+async def update_countdown(context: ContextTypes.DEFAULT_TYPE) -> None:
+    job_data = context.job.data
+    remaining_seconds = int((job_data["end_time"] - datetime.now()).total_seconds())
+    
+    if remaining_seconds < 0:
+        return # end_countdown kümmert sich darum
+
+    emoji_time_str = get_emoji_time(remaining_seconds)
+    text = f"⏰ Dein Angebot endet in: {emoji_time_str}"
+    
+    try:
+        await context.bot.edit_message_text(
+            chat_id=job_data["chat_id"],
+            message_id=job_data["timer_message_id"],
+            text=text
+        )
+    except error.BadRequest as e:
+        if "message is not modified" not in str(e):
+            logger.warning(f"Could not update countdown timer for chat {job_data['chat_id']}: {e}")
+            context.job.schedule_removal()
+
+async def end_countdown(context: ContextTypes.DEFAULT_TYPE) -> None:
+    job_data = context.job.data
+    context.chat_data.pop(f'countdown_job_{job_data["chat_id"]}', None)
+    
+    try:
+        await context.bot.edit_message_text(
+            chat_id=job_data["chat_id"],
+            message_id=job_data["timer_message_id"],
+            text="⌛️ Angebot abgelaufen!"
+        )
+        
+        text = (f"Du hast das Paket **{job_data['amount']} {job_data['media_type'].capitalize()}** für {job_data['price_str']} ausgewählt.\n\n"
+                "Das exklusive Angebot ist leider abgelaufen.\nWie möchtest du bezahlen?")
+        keyboard = [
+            [InlineKeyboardButton(" PayPal", callback_data=f"pay_paypal:{job_data['media_type']}:{job_data['amount']}")],
+            [InlineKeyboardButton(" Gutschein (Amazon)", callback_data=f"pay_voucher:{job_data['media_type']}:{job_data['amount']}")],
+            [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{job_data['media_type']}:{job_data['amount']}")],
+            [InlineKeyboardButton("« Zurück zu den Preisen", callback_data="show_price_options")]
+        ]
+        await context.bot.edit_message_text(
+            chat_id=job_data["chat_id"],
+            message_id=job_data["buttons_message_id"],
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    except error.BadRequest as e:
+        logger.warning(f"Could not finalize expired countdown for chat {job_data['chat_id']}: {e}")
+
+# --- Haupt-Handler Funktion ---
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -369,6 +427,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("Du bist von der Nutzung dieses Bots ausgeschlossen.", show_alert=True)
         return
 
+    # Countdown-Jobs stoppen, wenn eine Aktion ausgeführt wird
+    job_name = context.chat_data.get(f'countdown_job_{chat_id}')
+    if job_name:
+        jobs = context.job_queue.get_jobs_by_name(job_name)
+        if jobs:
+            for job in jobs:
+                job.schedule_removal()
+            context.chat_data.pop(f'countdown_job_{chat_id}')
+
     if data == "main_menu":
         await start(update, context)
         return
@@ -377,6 +444,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if str(user.id) != ADMIN_USER_ID:
             await query.answer("⛔️ Keine Berechtigung.", show_alert=True)
             return
+        # (Admin code remains unchanged...)
         if not data.startswith(("admin_discount", "admin_delete_", "admin_preview_")):
             for key in list(context.user_data.keys()):
                 if key.startswith(('rabatt_', 'awaiting_')) and key != 'awaiting_voucher':
@@ -514,12 +582,34 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         price = get_discounted_price(base_price, user_data.get("discounts"), package_key)
         if price == -1: price = base_price
         price_str = f"~{base_price}€~ *{price}€* (Rabatt)" if price != base_price else f"*{price}€*"
-        
-        text = f"Du hast das Paket **{amount} {media_type.capitalize()}** für {price_str} ausgewählt.\n\nWie möchtest du bezahlen?"
-        text += "\n\n🔥 *PayPal-Aktion: Kaufe 1, erhalte 2!* 🔥"
 
-        keyboard = [[InlineKeyboardButton(" PayPal", callback_data=f"pay_paypal:{media_type}:{amount}")], [InlineKeyboardButton(" Gutschein (Amazon)", callback_data=f"pay_voucher:{media_type}:{amount}")], [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zu den Preisen", callback_data="show_price_options")]]
-        await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        await cleanup_previous_messages(chat_id, context)
+        try: await query.message.delete()
+        except error.TelegramError: pass
+        
+        end_time = datetime.now() + timedelta(seconds=30)
+        keyboard = [[InlineKeyboardButton("🔥 PayPal (2 für 1 Angebot) 🔥", callback_data=f"pay_paypal:{media_type}:{amount}")], [InlineKeyboardButton(" Gutschein (Amazon)", callback_data=f"pay_voucher:{media_type}:{amount}")], [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zu den Preisen", callback_data="show_price_options")]]
+        
+        timer_msg = await context.bot.send_message(chat_id=chat_id, text=f"⏰ Dein Angebot endet in: {get_emoji_time(30)}")
+        
+        buttons_text = (f"Du hast das Paket **{amount} {media_type.capitalize()}** für {price_str} ausgewählt.\n\n"
+                        "Wie möchtest du bezahlen?")
+        buttons_msg = await context.bot.send_message(chat_id=chat_id, text=buttons_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        
+        job_name = f'countdown_{chat_id}_{buttons_msg.message_id}'
+        context.chat_data[f'countdown_job_{chat_id}'] = job_name
+
+        job_data = {
+            "chat_id": chat_id,
+            "timer_message_id": timer_msg.message_id,
+            "buttons_message_id": buttons_msg.message_id,
+            "end_time": end_time,
+            "amount": amount,
+            "media_type": media_type,
+            "price_str": price_str
+        }
+        context.job_queue.run_repeating(update_countdown, interval=5, first=5, data=job_data, name=job_name)
+        context.job_queue.run_once(end_countdown, when=30, data=job_data, name=job_name)
 
     async def update_payment_log(payment_method: str, price_val: int):
         stats_log = load_stats(); user_data_log = stats_log.get("users", {}).get(str(user.id))
@@ -530,6 +620,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await send_or_update_admin_log(context, user, event_text=f"Bezahlmethode '{payment_method}' für {price_val}€ gewählt")
 
     if data.startswith(("pay_paypal:", "pay_voucher:", "pay_crypto:")):
+        # Stop any active countdown jobs before proceeding
+        job_name = context.chat_data.pop(f'countdown_job_{chat_id}', None)
+        if job_name:
+            jobs = context.job_queue.get_jobs_by_name(job_name)
+            for job in jobs:
+                job.schedule_removal()
+        # You might want to delete or edit the timer message here
+        # For now, we'll just let it expire or be cleaned up later.
+        
         _, media_type, amount_str = data.split(":")
         amount = int(amount_str)
         base_price = PRICES[media_type][amount]
@@ -544,34 +643,25 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             if NOTIFICATION_GROUP_ID:
                 try:
                     user_mention = f"[{escape_markdown(user.first_name, version=2)}](tg://user?id={user.id})"
-                    admin_notification_text = (
-                        f"💸 *PayPal 2-für-1 Aktion gestartet* 💸\n\n"
-                        f"Nutzer {user_mention} (`{user.id}`) hat die Zahlung für ein Paket über *{price}€* per PayPal eingeleitet.\n\n"
-                        "Bitte halte dich bereit, ihm sein zweites Gratis-Paket freizuschalten, nachdem die Zahlung bestätigt wurde."
-                    )
+                    admin_notification_text = (f"💸 *PayPal 2-für-1 Aktion gestartet* 💸\n\n" f"Nutzer {user_mention} (`{user.id}`) hat die Zahlung für ein Paket über *{price}€* per PayPal eingeleitet.\n\n" "Bitte halte dich bereit, ihm sein zweites Gratis-Paket freizuschalten, nachdem die Zahlung bestätigt wurde.")
                     await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=admin_notification_text, parse_mode='Markdown')
                 except error.BadRequest as e:
-                    logger.error(f"Could not send PayPal notification to group {NOTIFICATION_GROUP_ID}: {e}")
+                    logger.error(f"Could not send PayPal notification to group {NOTIFICATION_GROUP_ID}: {e} - Is the Bot in the group?")
 
             paypal_link = f"https://paypal.me/{PAYPAL_USER}/{price}"
-            text = (
-                f"Super! Klicke auf den Link, um die Zahlung für **{amount} {media_type.capitalize()}** in Höhe von **{price}€** abzuschließen.\n\n"
-                f"Gib als Verwendungszweck bitte deinen Telegram-Namen an.\n\n"
-                f"➡️ [Hier sicher bezahlen]({paypal_link})\n\n"
-                "🎉 *Nach der Zahlung melde dich beim Admin, um dein zweites, kostenloses Paket zu erhalten!*"
-            )
-            keyboard = [[InlineKeyboardButton("« Zurück zur Bezahlwahl", callback_data=f"select_package:{media_type}:{amount}")]]
+            text = (f"Super! Klicke auf den Link, um die Zahlung für **{amount} {media_type.capitalize()}** in Höhe von **{price}€** abzuschließen.\n\n" f"Gib als Verwendungszweck bitte deinen Telegram-Namen an.\n\n" f"➡️ [Hier sicher bezahlen]({paypal_link})\n\n" "🎉 *Nach der Zahlung melde dich beim Admin, um dein zweites, kostenloses Paket zu erhalten!*")
+            keyboard = [[InlineKeyboardButton("« Zurück zur Paketauswahl", callback_data="show_price_options")]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown', disable_web_page_preview=True)
         
         elif data.startswith("pay_voucher:"):
             await track_event("payment_voucher", context, user.id); await update_payment_log("Gutschein", price)
             context.user_data["awaiting_voucher"] = "amazon"
             text = "Bitte sende mir jetzt deinen Amazon-Gutschein-Code als einzelne Nachricht."
-            keyboard = [[InlineKeyboardButton("Abbrechen", callback_data=f"select_package:{media_type}:{amount_str}")]]
+            keyboard = [[InlineKeyboardButton("Abbrechen", callback_data="show_price_options")]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         
         elif data.startswith("pay_crypto:"):
-            await track_event("payment_crypto", context, user.id); await update_payment_log("Krypto", price); text = "Bitte wähle die gewünschte Kryptowährung:"; keyboard = [[InlineKeyboardButton("Bitcoin (BTC)", callback_data=f"show_wallet:btc:{media_type}:{amount}"), InlineKeyboardButton("Ethereum (ETH)", callback_data=f"show_wallet:eth:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zur Bezahlwahl", callback_data=f"select_package:{media_type}:{amount}")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+            await track_event("payment_crypto", context, user.id); await update_payment_log("Krypto", price); text = "Bitte wähle die gewünschte Kryptowährung:"; keyboard = [[InlineKeyboardButton("Bitcoin (BTC)", callback_data=f"show_wallet:btc:{media_type}:{amount}"), InlineKeyboardButton("Ethereum (ETH)", callback_data=f"show_wallet:eth:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zur Paketauswahl", callback_data="show_price_options")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("show_wallet:"):
         _, crypto_type, media_type, amount_str = data.split(":")
@@ -594,6 +684,8 @@ def get_price_keyboard(user_id: int):
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if str(update.effective_user.id) != ADMIN_USER_ID: await update.message.reply_text("⛔️ Du hast keine Berechtigung für diesen Befehl."); return
     await show_admin_menu(update, context)
+
+# ... (Rest of the file remains unchanged)
 
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "🔒 *Admin-Menü*\n\nWähle eine Option:"
