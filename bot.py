@@ -25,7 +25,6 @@ from telegram.helpers import escape_markdown
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PAYPAL_USER = os.getenv("PAYPAL_USER")
-# NEU: Webhook URL wird wieder verwendet
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
 NOTIFICATION_GROUP_ID = os.getenv("NOTIFICATION_GROUP_ID")
@@ -36,7 +35,12 @@ PREVIEW_CAPTION = os.getenv("PREVIEW_CAPTION", "Hier ist eine Vorschau. Ich bin 
 BTC_WALLET = "1FcgMLNBDLiuDSDip7AStuP19sq47LJB12"
 ETH_WALLET = "0xeeb8FDc4aAe71B53934318707d0e9747C5c66f6e"
 
-PRICES = {"bilder": {10: 5, 25: 10, 35: 15}, "videos": {10: 15, 25: 25, 35: 30}}
+# --- NEU: Preise für Live Calls hinzugefügt ---
+PRICES = {
+    "bilder": {10: 5, 25: 10, 35: 15}, 
+    "videos": {10: 15, 25: 25, 35: 30},
+    "livecall": {10: 10, 15: 15, 20: 20, 30: 30, 60: 50, 120: 80}
+}
 VOUCHER_FILE = "vouchers.json"
 STATS_FILE = "stats.json"
 MEDIA_DIR = "image"
@@ -268,7 +272,7 @@ async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     keyboard_buttons = [
         [InlineKeyboardButton("🖼️ Nächstes Medium", callback_data=f"next_preview:{media_type}")],
-        [InlineKeyboardButton("🛍️ Zu den Preisen", callback_data="show_price_options")],
+        [InlineKeyboardButton("🛍️ Preise & Pakete", callback_data="show_price_options")],
         [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]
     ]
     control_message = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard_buttons))
@@ -324,7 +328,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     welcome_text = ( "Herzlich Willkommen! ✨\n\n" "Hier kannst du eine Vorschau meiner Inhalte sehen oder direkt ein Paket auswählen. " "Die gesamte Bedienung erfolgt über die Buttons.")
     keyboard = [
         [InlineKeyboardButton("🖼️ Vorschau", callback_data="show_preview:combined")],
-        [InlineKeyboardButton("🛍️ Preise & Pakete", callback_data="show_price_options")]
+        [InlineKeyboardButton("🛍️ Bilder & Videos", callback_data="show_price_options")],
+        [InlineKeyboardButton("📞 Live Call", callback_data="live_call_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -368,7 +373,6 @@ async def show_prices_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard))
         context.chat_data['main_message_id'] = msg.message_id
     
-# --- Countdown & Roulette Functions ---
 def get_emoji_time(seconds: int) -> str:
     digits = {"0": "0️⃣", "1": "1️⃣", "2": "2️⃣", "3": "3️⃣", "4": "4️⃣", "5": "5️⃣", "6": "6️⃣", "7": "7️⃣", "8": "8️⃣", "9": "9️⃣"}
     s_str = f"{max(0, seconds):02d}"
@@ -436,7 +440,6 @@ async def end_countdown(context: ContextTypes.DEFAULT_TYPE) -> None:
     except error.BadRequest as e:
         logger.warning(f"Could not finalize expired countdown for chat {job_data['chat_id']}: {e}")
 
-# --- Main Handler Function ---
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -887,7 +890,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handle_callback_query))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
-    # NEU: Flexible Startmethode basierend auf WEBHOOK_URL
+    # Flexible start method based on WEBHOOK_URL
     if WEBHOOK_URL:
         port = int(os.environ.get("PORT", 8443))
         logger.info(f"Starting bot in webhook mode on port {port}")
