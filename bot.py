@@ -35,12 +35,11 @@ PREVIEW_CAPTION = os.getenv("PREVIEW_CAPTION", "Hier ist eine Vorschau. Ich bin 
 BTC_WALLET = "1FcgMLNBDLiuDSDip7AStuP19sq47LJB12"
 ETH_WALLET = "0xeeb8FDc4aAe71B53934318707d0e9747C5c66f6e"
 
-# --- NEU: Angepasste Preise für Treffen ---
 PRICES = {
     "bilder": {10: 5, 25: 10, 35: 15}, 
     "videos": {10: 15, 25: 25, 35: 30},
     "livecall": {10: 10, 15: 15, 20: 20, 30: 30, 60: 50, 120: 80},
-    "treffen": {60: 200, 120: 300, 240: 400, 1440: 600, 2880: 800} # 1h, 2h, 4h, 1 day, 2 days
+    "treffen": {60: 200, 120: 300, 240: 400, 1440: 600, 2880: 800}
 }
 VOUCHER_FILE = "vouchers.json"
 STATS_FILE = "stats.json"
@@ -383,7 +382,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if str(user.id) != ADMIN_USER_ID:
             await query.answer("⛔️ Keine Berechtigung.", show_alert=True)
             return
-        # (Admin-Code hier, unverändert)
+        # (Admin code remains unchanged)
         return
 
     if data == "download_vouchers_pdf":
@@ -415,6 +414,28 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         for duration, price in PRICES['livecall'].items():
             duration_text = f"{duration} Min" if duration < 60 else f"{duration//60} Std"
             row.append(InlineKeyboardButton(f"{duration_text} - {price}€", callback_data=f"select_package:livecall:{duration}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+            
+        keyboard.append([InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")])
+        
+        msg = await context.bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(keyboard))
+        context.chat_data['main_message_id'] = msg.message_id
+        
+    elif data == "treffen_menu":
+        await cleanup_bot_messages(chat_id, context)
+        text = "📅 Wähle die gewünschte Dauer für dein Treffen:"
+        
+        keyboard = []
+        row = []
+        # Sortiere die Schlüssel (Dauer in Minuten), um eine logische Reihenfolge zu gewährleisten
+        for duration in sorted(PRICES['treffen'].keys()):
+            price = PRICES['treffen'][duration]
+            duration_text = get_package_button_text('treffen', duration, user.id)
+            row.append(InlineKeyboardButton(f"{duration_text}", callback_data=f"select_treffen_duration:{duration}"))
             if len(row) == 2:
                 keyboard.append(row)
                 row = []
