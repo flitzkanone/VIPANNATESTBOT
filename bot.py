@@ -35,11 +35,12 @@ PREVIEW_CAPTION = os.getenv("PREVIEW_CAPTION", "Hier ist eine Vorschau. Ich bin 
 BTC_WALLET = "1FcgMLNBDLiuDSDip7AStuP19sq47LJB12"
 ETH_WALLET = "0xeeb8FDc4aAe71B53934318707d0e9747C5c66f6e"
 
+# --- NEU: Erweiterte Preise für Treffen ---
 PRICES = {
     "bilder": {10: 5, 25: 10, 35: 15}, 
     "videos": {10: 15, 25: 25, 35: 30},
     "livecall": {10: 10, 15: 15, 20: 20, 30: 30, 60: 50, 120: 80},
-    "treffen": {60: 200, 120: 300, 240: 400, 1440: 600, 2880: 800}
+    "treffen": {60: 200, 120: 300, 240: 400, 1440: 600, 2880: 800} # 1h, 2h, 4h, 1 day, 2 days
 }
 VOUCHER_FILE = "vouchers.json"
 STATS_FILE = "stats.json"
@@ -424,14 +425,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         
         msg = await context.bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(keyboard))
         context.chat_data['main_message_id'] = msg.message_id
-        
+    
     elif data == "treffen_menu":
         await cleanup_bot_messages(chat_id, context)
         text = "📅 Wähle die gewünschte Dauer für dein Treffen:"
         
         keyboard = []
         row = []
-        # Sortiere die Schlüssel (Dauer in Minuten), um eine logische Reihenfolge zu gewährleisten
         for duration in sorted(PRICES['treffen'].keys()):
             price = PRICES['treffen'][duration]
             duration_text = get_package_button_text('treffen', duration, user.id)
@@ -446,7 +446,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         
         msg = await context.bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(keyboard))
         context.chat_data['main_message_id'] = msg.message_id
-    
+
     elif data.startswith("next_preview:"):
         if 'control_message_id' in context.chat_data:
             try: await context.bot.delete_message(chat_id, context.chat_data.pop('control_message_id'))
@@ -491,6 +491,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                         [InlineKeyboardButton("🖼️ Nächstes Medium", callback_data=f"next_preview:{media_type}")],
                         [InlineKeyboardButton("🛍️ Preise & Pakete", callback_data="show_price_options")],
                         [InlineKeyboardButton("📞 Live Call", callback_data="live_call_menu")],
+                        [InlineKeyboardButton("📅 Treffen buchen", callback_data="treffen_menu")],
                         [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]
                     ]
                     control_message = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard_buttons))
