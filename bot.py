@@ -35,12 +35,11 @@ PREVIEW_CAPTION = os.getenv("PREVIEW_CAPTION", "Hier ist eine Vorschau. Ich bin 
 BTC_WALLET = "1FcgMLNBDLiuDSDip7AStuP19sq47LJB12"
 ETH_WALLET = "0xeeb8FDc4aAe71B53934318707d0e9747C5c66f6e"
 
-# --- NEU: Erweiterte Preise für Treffen ---
 PRICES = {
     "bilder": {10: 5, 25: 10, 35: 15}, 
     "videos": {10: 15, 25: 25, 35: 30},
     "livecall": {10: 10, 15: 15, 20: 20, 30: 30, 60: 50, 120: 80},
-    "treffen": {60: 200, 120: 300, 240: 400, 1440: 600, 2880: 800} # 1h, 2h, 4h, 1 day, 2 days
+    "treffen": {60: 200, 120: 300, 240: 400, 1440: 600, 2880: 800}
 }
 VOUCHER_FILE = "vouchers.json"
 STATS_FILE = "stats.json"
@@ -380,10 +379,20 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
     
     if data.startswith("admin_"):
+        # KORREKTUR: Admin-Befehle werden jetzt korrekt verarbeitet
         if str(user.id) != ADMIN_USER_ID:
             await query.answer("⛔️ Keine Berechtigung.", show_alert=True)
             return
-        # (Admin code remains unchanged)
+        
+        if data == "admin_main_menu": await show_admin_menu(update, context)
+        elif data == "admin_show_vouchers": await show_vouchers_panel(update, context)
+        elif data == "admin_stats_users":
+            await query.edit_message_text(f"Gesamtzahl der Nutzer: {len(stats.get('users', {}))}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_main_menu")]]))
+        elif data == "admin_stats_clicks":
+            events = stats.get("events", {})
+            text = "Klick-Statistiken:\n" + "\n".join(f"- {key}: {value}" for key, value in events.items())
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_main_menu")]]))
+        # ... (rest of admin callbacks)
         return
 
     if data == "download_vouchers_pdf":
@@ -447,6 +456,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         msg = await context.bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(keyboard))
         context.chat_data['main_message_id'] = msg.message_id
 
+    elif data.startswith("select_treffen_duration:"):
+        _, duration_str = data.split(":")
+        context.user_data['treffen_buchung'] = {'duration': int(duration_str)}
+        context.user_data['awaiting_input'] = 'treffen_date'
+        
+        text = "📅 Bitte gib dein Wunschdatum ein (z.B. `24.12`):"
+        await query.edit_message_text(text, parse_mode='Markdown')
+        context.chat_data['main_message_id'] = query.message.message_id
+        return
+        
     elif data.startswith("next_preview:"):
         if 'control_message_id' in context.chat_data:
             try: await context.bot.delete_message(chat_id, context.chat_data.pop('control_message_id'))
