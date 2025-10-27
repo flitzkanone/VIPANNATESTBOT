@@ -454,7 +454,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(text, parse_mode='Markdown')
         context.chat_data['main_message_id'] = query.message.message_id
         return
-
+        
     elif data.startswith("next_preview:"):
         if 'control_message_id' in context.chat_data:
             try: await context.bot.delete_message(chat_id, context.chat_data.pop('control_message_id'))
@@ -557,6 +557,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if media_type == "livecall":
             price = PRICES[media_type][amount]
             package_info_text = f"{amount} Min Live Call"
+        elif media_type == "treffen":
+            price = PRICES[media_type][amount] / 4 # Anzahlung
+            package_info_text = f"Anzahlung Treffen ({get_package_button_text('treffen', amount, user.id)})"
         else:
             base_price = PRICES[media_type][amount]
             package_key = f"{media_type}_{amount}"
@@ -578,10 +581,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
             paypal_link = f"https://paypal.me/{PAYPAL_USER}/{price}"
             text = (f"Super! Klicke auf den Link, um die Zahlung für **{package_info_text}** in Höhe von **{price}€** abzuschließen.\n\n" f"Gib als Verwendungszweck bitte deinen Telegram-Namen an.\n\n" f"➡️ [Hier sicher bezahlen]({paypal_link})\n\n")
-            if media_type == "livecall":
+            if media_type in ["livecall", "treffen"]:
                 text += "📲 *Melde dich danach bei @ANNASPICY mit einem Screenshot deiner Zahlung!*"
             
-            back_button_data = "live_call_menu" if media_type == "livecall" else "show_price_options"
+            back_button_data = f"{media_type}_menu" if media_type in ["livecall", "treffen"] else "show_price_options"
             keyboard = [[InlineKeyboardButton("« Zurück zur Auswahl", callback_data=back_button_data)]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown', disable_web_page_preview=True)
             context.chat_data['main_message_id'] = query.message.message_id
@@ -590,13 +593,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await track_event(f"payment_{media_type}", context, user.id); await update_payment_log("Gutschein", price, package_info_text)
             context.user_data["awaiting_voucher"] = "amazon"
             text = "Bitte sende mir jetzt deinen Amazon-Gutschein-Code als einzelne Nachricht."
-            back_button_data = "live_call_menu" if media_type == "livecall" else "show_price_options"
+            back_button_data = f"{media_type}_menu" if media_type in ["livecall", "treffen"] else "show_price_options"
             keyboard = [[InlineKeyboardButton("Abbrechen", callback_data=back_button_data)]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
             context.chat_data['main_message_id'] = query.message.message_id
         
         elif data.startswith("pay_crypto:"):
-            await track_event(f"payment_{media_type}", context, user.id); await update_payment_log("Krypto", price, package_info_text); text = "Bitte wähle die gewünschte Kryptowährung:"; keyboard = [[InlineKeyboardButton("Bitcoin (BTC)", callback_data=f"show_wallet:btc:{media_type}:{amount}"), InlineKeyboardButton("Ethereum (ETH)", callback_data=f"show_wallet:eth:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zur Paketauswahl", callback_data="show_price_options")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+            await track_event(f"payment_{media_type}", context, user.id); await update_payment_log("Krypto", price, package_info_text); text = "Bitte wähle die gewünschte Kryptowährung:"; keyboard = [[InlineKeyboardButton("Bitcoin (BTC)", callback_data=f"show_wallet:btc:{media_type}:{amount}"), InlineKeyboardButton("Ethereum (ETH)", callback_data=f"show_wallet:eth:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zur Paketauswahl", callback_data=f"show_price_options")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
             context.chat_data['main_message_id'] = query.message.message_id
 
     elif data.startswith("show_wallet:"):
@@ -604,6 +607,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         amount = int(amount_str)
         if media_type == "livecall":
             price = PRICES[media_type][amount]
+        elif media_type == "treffen":
+            price = PRICES[media_type][amount] / 4
         else:
             base_price = PRICES[media_type][amount]
             package_key = f"{media_type}_{amount}"
@@ -667,7 +672,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data['awaiting_input'] = None
         
         duration = buchung['duration']
-        duration_text = get_package_button_text('treffen', duration, user.id).split(' ')[0] + " " + get_package_button_text('treffen', duration, user.id).split(' ')[1]
+        duration_text = get_package_button_text('treffen', duration, user.id).split(' - ')[0]
         full_price = PRICES['treffen'][duration]
         deposit = full_price / 4
         cash_price = full_price * 0.9 # 10% Rabatt
@@ -678,14 +683,17 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"**Datum:** {buchung['date']}\n"
             f"**Ort:** {buchung['location']}\n\n"
             f"**Gesamtpreis:** {full_price}€\n"
-            f"**Barzahler-Rabatt (10%):** -{full_price * 0.1}€\n"
-            f"**Neuer Endpreis:** **{cash_price}€**\n\n"
-            f"Zur Verifizierung ist eine **Anzahlung von 25% ({deposit}€)** erforderlich. "
+            f"**Barzahler-Rabatt (10%):** -{full_price * 0.1:.2f}€\n"
+            f"**Neuer Endpreis:** **{cash_price:.2f}€**\n\n"
+            f"Zur Verifizierung ist eine **Anzahlung von 25% ({deposit:.2f}€)** erforderlich. "
             f"Der Restbetrag wird in bar beim Treffen bezahlt."
         )
         
         await update.message.reply_text("Status: ✅ Verfügbar")
-        keyboard = [[InlineKeyboardButton(f"Anzahlung ({deposit}€) leisten", callback_data=f"pay_paypal:treffen:{duration}")]];
+        keyboard = [[InlineKeyboardButton(f"Anzahlung ({deposit:.2f}€) per PayPal", callback_data=f"pay_paypal:treffen:{duration}")],
+                    [InlineKeyboardButton(f"Anzahlung ({deposit:.2f}€) per Gutschein", callback_data=f"pay_voucher:treffen:{duration}")],
+                    [InlineKeyboardButton(f"Anzahlung ({deposit:.2f}€) per Krypto", callback_data=f"pay_crypto:treffen:{duration}")],
+                    [InlineKeyboardButton("« Abbrechen", callback_data="treffen_menu")]]
         await update.message.reply_text(summary_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         return
 
@@ -733,7 +741,7 @@ async def handle_admin_discount_input(update: Update, context: ContextTypes.DEFA
 async def apply_all_packages_and_finalize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rabatt_value = context.user_data.get('rabatt_value')
     for media_type, amounts in PRICES.items():
-        if media_type == 'livecall': continue
+        if media_type in ['livecall', 'treffen']: continue
         for amount in amounts:
             context.user_data['rabatt_data']['packages'][f"{media_type}_{amount}"] = rabatt_value
     await finalize_discount_action(update, context)
