@@ -447,11 +447,32 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 row = []
         if row:
             keyboard.append(row)
+
+        # NEU START: Button für die Erklärung zur Anzahlung hinzugefügt
+        keyboard.append([InlineKeyboardButton("ℹ️ Warum eine Anzahlung?", callback_data="treffen_info_anzahlung")])
+        # NEU ENDE
             
         keyboard.append([InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")])
         
         msg = await context.bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(keyboard))
         context.chat_data['main_message_id'] = msg.message_id
+
+    # NEU START: Logik zur Behandlung des Klicks auf den neuen Info-Button
+    elif data == "treffen_info_anzahlung":
+        text = (
+            "ℹ️ **Information zur Anzahlung**\n\n"
+            "Die Anzahlung dient als beidseitige Sicherheit und zur Verifizierung deines Termins.\n\n"
+            "Sie stellt sicher, dass nur ernstgemeinte Anfragen gestellt werden und schützt mich vor Spaßbuchungen oder Nichterscheinen. "
+            "So kann ich den Termin exklusiv für dich reservieren.\n\n"
+            "Der Restbetrag wird dann bequem und diskret in bar beim Treffen bezahlt."
+        )
+        keyboard = [
+            [InlineKeyboardButton("« Zurück zur Auswahl", callback_data="treffen_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        return
+    # NEU ENDE
 
     elif data.startswith("select_treffen_duration:"):
         _, duration_str = data.split(":")
