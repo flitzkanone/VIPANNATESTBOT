@@ -383,7 +383,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if str(user.id) != ADMIN_USER_ID:
             await query.answer("⛔️ Keine Berechtigung.", show_alert=True)
             return
-        # (Admin code remains unchanged)
+        if data == "admin_main_menu": await show_admin_menu(update, context)
+        elif data == "admin_show_vouchers": await show_vouchers_panel(update, context)
+        elif data == "admin_stats_users":
+            await query.edit_message_text(f"Gesamtzahl der Nutzer: {len(stats.get('users', {}))}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_main_menu")]]))
+        elif data == "admin_stats_clicks":
+            events = stats.get("events", {})
+            text = "Klick-Statistiken:\n" + "\n".join(f"- {key}: {value}" for key, value in events.items())
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_main_menu")]]))
         return
 
     if data == "download_vouchers_pdf":
