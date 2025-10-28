@@ -30,14 +30,14 @@ ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
 NOTIFICATION_GROUP_ID = os.getenv("NOTIFICATION_GROUP_ID")
 TELEGRAM_USERNAME = os.getenv("TELEGRAM_USERNAME", "ANNASPICY")
 
-AGE_ANNA = os.getenv("AGE_ANNA", "18") 
+AGE_ANNA = os.getenv("AGE_ANNA", "18")
 PREVIEW_CAPTION = os.getenv("PREVIEW_CAPTION", "Hier ist eine Vorschau. Ich bin {age_anna} Jahre alt. Klicke auf 'Nächstes Medium' für mehr.")
 
 BTC_WALLET = "1FcgMLNBDLiuDSDip7AStuP19sq47LJB12"
 ETH_WALLET = "0xeeb8FDc4aAe71B53934318707d0e9747C5c66f6e"
 
 PRICES = {
-    "bilder": {10: 5, 25: 10, 35: 15}, 
+    "bilder": {10: 5, 25: 10, 35: 15},
     "videos": {10: 15, 25: 25, 35: 30},
     "livecall": {10: 10, 15: 15, 20: 20, 30: 30, 60: 50, 120: 80},
     "treffen": {60: 200, 120: 300, 240: 400, 1440: 600, 2880: 800}
@@ -124,7 +124,7 @@ def is_user_banned(user_id: int) -> bool:
 def get_discounted_price(base_price: int, discount_data: dict, package_key: str) -> int:
     if not discount_data: return -1
     discount_type = discount_data.get("type")
-    
+
     if discount_type == "percent":
         value = discount_data.get("value", 0); new_price = base_price * (1 - value / 100); return ceil(new_price)
     elif discount_type == "euro_packages":
@@ -137,7 +137,7 @@ def get_discounted_price(base_price: int, discount_data: dict, package_key: str)
 
 def get_package_button_text(media_type: str, amount: int, user_id: int) -> str:
     stats = load_stats(); user_data = stats.get("users", {}).get(str(user_id), {}); base_price = PRICES[media_type][amount]; package_key = f"{media_type}_{amount}"
-    
+
     duration_text = ""
     if media_type == "livecall":
         if amount < 60: duration_text = f"{amount} Min"
@@ -153,9 +153,9 @@ def get_package_button_text(media_type: str, amount: int, user_id: int) -> str:
 
     if media_type not in ["livecall", "treffen"]:
         discount_price = get_discounted_price(base_price, user_data.get("discounts"), package_key)
-        if discount_price != -1: 
+        if discount_price != -1:
             return f"{duration_text} ~{base_price}~{discount_price}€ ✨"
-    
+
     return f"{duration_text} {base_price}€"
 
 async def check_user_status(user_id: int, context: ContextTypes.DEFAULT_TYPE):
@@ -163,17 +163,17 @@ async def check_user_status(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     stats = load_stats()
     user_id_str = str(user_id)
     now = datetime.now()
-    
+
     if user_id_str not in stats.get("users", {}):
         stats = ensure_user_in_stats(user_id, stats)
         return "new", True, stats["users"][user_id_str]
 
     user_data = stats["users"][user_id_str]
     last_start_dt = datetime.fromisoformat(user_data.get("last_start"))
-    
+
     if now - last_start_dt > timedelta(hours=24):
         return "returning", True, user_data
-    
+
     return "active", False, user_data
 
 async def send_or_update_admin_log(context: ContextTypes.DEFAULT_TYPE, user: User, event_text: str = ""):
@@ -226,22 +226,22 @@ async def cleanup_bot_messages(chat_id: int, context: ContextTypes.DEFAULT_TYPE)
 async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYPE, media_type: str, start_index: int = 0):
     await cleanup_bot_messages(update.effective_chat.id, context)
     chat_id = update.effective_chat.id
-    
+
     media_paths = get_media_files(media_type, "vorschau")
     if media_type == 'combined': random.shuffle(media_paths)
-    
+
     context.user_data['preview_gallery'] = media_paths
 
     if not media_paths:
         msg = await context.bot.send_message(chat_id=chat_id, text="Ups! Ich konnte gerade keine passenden Inhalte finden...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="main_menu")]]))
         context.chat_data['main_message_id'] = msg.message_id
         return
-    
+
     start_index = start_index % len(media_paths)
     context.user_data[f'preview_index_{media_type}'] = start_index
     media_to_show_path = media_paths[start_index]
     file_extension = os.path.splitext(media_to_show_path)[1].lower()
-    
+
     media_message = None
     try:
         with open(media_to_show_path, 'rb') as media_file:
@@ -271,7 +271,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message: await update.message.reply_text("Du bist von der Nutzung dieses Bots ausgeschlossen.")
         elif update.callback_query: await update.callback_query.answer("Du bist von der Nutzung dieses Bots ausgeschlossen.", show_alert=True)
         return
-    
+
     try:
         stats_before = load_stats()
         user_data_before = stats_before.get("users", {}).get(str(user.id))
@@ -288,7 +288,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 stats["users"][str(user.id)]["discount_sent"] = True
                 save_stats(stats)
                 await save_discounts_to_telegram(context)
-                
+
                 discount_notification_text = ("🎁 Wir haben dich vermisst! 🎁\n\n"
                                               "Als Willkommensgruß erhältst du einen exklusiven **10% Rabatt** auf alle Pakete!\n\n"
                                               "PLUS: Unser **2-für-1 PayPal-Angebot** gilt weiterhin für dich. Nutze die Chance!")
@@ -301,12 +301,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if should_notify:
             event_text = "Bot gestartet (neuer Nutzer)" if status == "new" else "Bot erneut gestartet"
             await send_or_update_admin_log(context, user, event_text=event_text)
-            
+
     except Exception as e:
         logger.error(f"Error in start admin logic for user {user.id}: {e}")
 
     stats = load_stats()
-    stats = ensure_user_in_stats(user.id, stats) 
+    stats = ensure_user_in_stats(user.id, stats)
     stats["users"][str(user.id)]["last_start"] = datetime.now().isoformat()
     save_stats(stats)
 
@@ -335,13 +335,13 @@ async def show_prices_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user = update.effective_user
     await cleanup_bot_messages(chat_id, context)
-    
+
     await track_event("prices_viewed", context, user.id)
     await send_or_update_admin_log(context, user, event_text="Schaut sich die Preise an")
-            
+
     media_paths = get_media_files("videos", "preis")
     media_message = None
-    
+
     if media_paths:
         random_media_path = random.choice(media_paths)
         try:
@@ -352,14 +352,60 @@ async def show_prices_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     caption = "Wähle dein gewünschtes Paket:"
     keyboard = get_price_keyboard(user.id)
-    
+
     if media_message:
         await context.bot.edit_message_caption(chat_id=chat_id, message_id=media_message.message_id, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard))
         context.chat_data['main_message_id'] = media_message.message_id
     else:
         msg = await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard))
         context.chat_data['main_message_id'] = msg.message_id
+
+# NEU START: Hilfsfunktion zur Anzeige der Treffen-Zusammenfassung
+async def show_treffen_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Zeigt die finale Zusammenfassung der Terminanfrage an."""
+    user = update.effective_user
+    buchung = context.user_data.get('treffen_buchung', {})
+
+    if not all(k in buchung for k in ['duration', 'date', 'location']):
+        text = "Ein Fehler ist aufgetreten. Bitte beginne die Buchung erneut."
+        keyboard = [[InlineKeyboardButton("« Zum Treffen-Menü", callback_data="treffen_menu")]]
+        await query_or_message_edit(update, text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    duration = buchung['duration']
+    duration_text = get_package_button_text('treffen', duration, user.id).split(' ')[0] + " " + get_package_button_text('treffen', duration, user.id).split(' ')[1]
+    full_price = PRICES['treffen'][duration]
+    deposit = ceil(full_price / 4)
+    # Annahme: Barzahler-Rabatt wird immer angeboten
+    cash_price = full_price * 0.9
+
+    summary_text = (
+        f"📅 **Deine Terminanfrage:**\n\n"
+        f"**Dauer:** {duration_text}\n"
+        f"**Datum:** {buchung['date']}\n"
+        f"**Ort:** {buchung['location']}\n\n"
+        f"**Gesamtpreis:** {full_price}€\n"
+        f"**Barzahler-Rabatt (10%):** -{full_price * 0.1:.2f}€\n"
+        f"**Neuer Endpreis (bei Barzahlung):** **{cash_price:.2f}€**\n\n"
+        f"Zur Verifizierung ist eine **Anzahlung von 25% ({deposit}€)** erforderlich. "
+        f"Diese deckt meine Reisekosten und dient als beidseitige Sicherheit. Der Restbetrag wird in bar beim Treffen bezahlt."
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("ℹ️ Warum diese Anzahlung?", callback_data="treffen_info_anzahlung_summary")],
+        [InlineKeyboardButton(f"Anzahlung ({deposit}€) per PayPal", callback_data=f"pay_paypal:treffen:{duration}")],
+        [InlineKeyboardButton(f"Anzahlung ({deposit}€) per Gutschein", callback_data=f"pay_voucher:treffen:{duration}")],
+        [InlineKeyboardButton(f"Anzahlung ({deposit}€) per Krypto", callback_data=f"pay_crypto:treffen:{duration}")],
+        [InlineKeyboardButton("« Buchung abbrechen", callback_data="treffen_menu")]
+    ]
     
+    # Sagen dem Nutzer, dass der Termin verfügbar ist, falls es eine neue Nachricht ist
+    if update.message:
+        await update.message.reply_text("Status: ✅ Dein Wunschtermin ist verfügbar!")
+
+    await query_or_message_edit(update, summary_text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+# NEU ENDE
+
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -374,11 +420,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     if is_user_banned(user.id):
         await query.answer("Du bist von der Nutzung dieses Bots ausgeschlossen.", show_alert=True)
         return
-    
+
     if data == "main_menu":
         await start(update, context)
         return
-    
+
     if data.startswith("admin_"):
         if str(user.id) != ADMIN_USER_ID:
             await query.answer("⛔️ Keine Berechtigung.", show_alert=True)
@@ -405,7 +451,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if user_data.get("preview_clicks", 0) >= 25:
             await query.answer("Du hast dein Vorschau-Limit von 25 Klicks bereits erreicht.", show_alert=True)
             return
-        
+
         await track_event(f"preview_{media_type}", context, user.id)
         await send_or_update_admin_log(context, user, event_text="Schaut sich Vorschau an")
         await send_preview_message(update, context, media_type)
@@ -416,7 +462,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif data == "live_call_menu":
         await cleanup_bot_messages(chat_id, context)
         text = "📞 Wähle die gewünschte Dauer für deinen Live Call:"
-        
+
         keyboard = []
         row = []
         for duration, price in PRICES['livecall'].items():
@@ -427,16 +473,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 row = []
         if row:
             keyboard.append(row)
-            
+
         keyboard.append([InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")])
-        
+
         msg = await context.bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(keyboard))
         context.chat_data['main_message_id'] = msg.message_id
-        
+
     elif data == "treffen_menu":
         await cleanup_bot_messages(chat_id, context)
         text = "📅 Wähle die gewünschte Dauer für dein Treffen:"
-        
+
         keyboard = []
         row = []
         for duration in sorted(PRICES['treffen'].keys()):
@@ -448,17 +494,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if row:
             keyboard.append(row)
 
-        # NEU START: Button für die Erklärung zur Anzahlung hinzugefügt
-        keyboard.append([InlineKeyboardButton("ℹ️ Warum eine Anzahlung?", callback_data="treffen_info_anzahlung")])
-        # NEU ENDE
-            
+        keyboard.append([InlineKeyboardButton("ℹ️ Warum eine Anzahlung?", callback_data="treffen_info_anzahlung_menu")])
         keyboard.append([InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")])
-        
+
         msg = await context.bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(keyboard))
         context.chat_data['main_message_id'] = msg.message_id
 
-    # NEU START: Logik zur Behandlung des Klicks auf den neuen Info-Button
-    elif data == "treffen_info_anzahlung":
+    # NEU START: Logik für die beiden Info-Buttons zur Anzahlung
+    elif data == "treffen_info_anzahlung_menu":
         text = (
             "ℹ️ **Information zur Anzahlung**\n\n"
             "Die Anzahlung dient als beidseitige Sicherheit und zur Verifizierung deines Termins.\n\n"
@@ -466,11 +509,26 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             "So kann ich den Termin exklusiv für dich reservieren.\n\n"
             "Der Restbetrag wird dann bequem und diskret in bar beim Treffen bezahlt."
         )
-        keyboard = [
-            [InlineKeyboardButton("« Zurück zur Auswahl", callback_data="treffen_menu")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        # Dieser Button führt zurück zum Menü mit der Dauer-Auswahl
+        keyboard = [[InlineKeyboardButton("« Zurück zur Auswahl", callback_data="treffen_menu")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        return
+
+    elif data == "treffen_info_anzahlung_summary":
+        text = (
+            "ℹ️ **Information zur Anzahlung**\n\n"
+            "Die Anzahlung dient als beidseitige Sicherheit und zur Verifizierung deines Termins.\n\n"
+            "Sie stellt sicher, dass nur ernstgemeinte Anfragen gestellt werden und schützt mich vor Spaßbuchungen oder Nichterscheinen. "
+            "So kann ich den Termin exklusiv für dich reservieren.\n\n"
+            "Der Restbetrag wird dann bequem und diskret in bar beim Treffen bezahlt."
+        )
+        # Dieser Button führt zurück zur finalen Zusammenfassung mit den Zahlungsoptionen
+        keyboard = [[InlineKeyboardButton("« Zurück zur Zahlung", callback_data="back_to_treffen_summary")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        return
+
+    elif data == "back_to_treffen_summary":
+        await show_treffen_summary(update, context)
         return
     # NEU ENDE
 
@@ -478,36 +536,36 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         _, duration_str = data.split(":")
         context.user_data['treffen_buchung'] = {'duration': int(duration_str)}
         context.user_data['awaiting_input'] = 'treffen_date'
-        
+
         text = "📅 Bitte gib dein Wunschdatum ein (z.B. `24.12`):"
         await query.edit_message_text(text, parse_mode='Markdown')
         context.chat_data['main_message_id'] = query.message.message_id
         return
-        
+
     elif data.startswith("next_preview:"):
         if 'control_message_id' in context.chat_data:
             try: await context.bot.delete_message(chat_id, context.chat_data.pop('control_message_id'))
             except error.TelegramError: pass
-        
+
         if user_data.get("preview_clicks", 0) >= 25:
             await query.answer("Vorschau-Limit erreicht!", show_alert=True); await cleanup_bot_messages(chat_id, context)
             limit_text = "Du hast dein Vorschau-Limit von 25 Klicks erreicht. Sieh dir jetzt die Preise an, um mehr zu sehen!"
             limit_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(f"🛍️ Preise ansehen", callback_data="show_price_options")], [InlineKeyboardButton("« Zurück zum Hauptmenü", callback_data="main_menu")]])
             msg = await context.bot.send_message(chat_id, text=limit_text, reply_markup=limit_keyboard); context.chat_data['main_message_id'] = msg.message_id; return
-        
+
         stats["users"][str(user.id)]["preview_clicks"] = user_data.get("preview_clicks", 0) + 1
         save_stats(stats)
         await track_event("next_preview", context, user.id)
-        
+
         _, media_type = data.split(":")
         await send_or_update_admin_log(context, user, event_text=f"Nächstes Medium ({media_type})")
-        
+
         media_paths = context.user_data.get('preview_gallery', get_media_files(media_type, "vorschau"))
         if not media_paths: return
-        
+
         index_key = f'preview_index_{media_type}'; current_index = context.user_data.get(index_key, 0)
         next_index = (current_index + 1) % len(media_paths)
-        
+
         current_path = media_paths[current_index]
         next_path = media_paths[next_index]
         is_current_video = any(current_path.lower().endswith(ext) for ext in ['.mp4', '.mov', '.m4v'])
@@ -536,18 +594,18 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             except Exception as e:
                 logger.warning(f"Could not edit media, resending: {e}")
                 await send_preview_message(update, context, media_type, start_index=next_index)
-    
+
     elif data.startswith("select_package:"):
         await track_event("package_selected", context, user.id)
         _, media_type, amount_str = data.split(":")
         amount = int(amount_str)
-        
+
         if media_type == "livecall":
             price = PRICES[media_type][amount]
             price_str = f"*{price}€*"
             text = (f"Du hast einen **Live Call** für **{amount} Minuten** für {price_str} ausgewählt.\n\n"
                     f"✅ Ich bin verfügbar! Bitte schließe die Bezahlung ab und melde dich danach bei **@{TELEGRAM_USERNAME}** mit einem Screenshot deiner Zahlung.")
-            
+
             keyboard = [[InlineKeyboardButton(" PayPal", callback_data=f"pay_paypal:{media_type}:{amount}")], [InlineKeyboardButton(" Gutschein (Amazon)", callback_data=f"pay_voucher:{media_type}:{amount}")], [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück", callback_data="live_call_menu")]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
             context.chat_data['main_message_id'] = query.message.message_id
@@ -560,13 +618,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         price_str = f"~{base_price}€~ *{price}€* (Rabatt)" if price != base_price else f"*{price}€*"
 
         await cleanup_bot_messages(chat_id, context)
-        
+
         text = f"Du hast das Paket **{amount} {media_type.capitalize()}** für {price_str} ausgewählt.\n\nWie möchtest du bezahlen?"
         if not user_data.get("paypal_offer_sent"):
             text += "\n\n🔥 *PayPal-Aktion: Kaufe 1, erhalte 2!* 🔥"
             stats["users"][str(user.id)]["paypal_offer_sent"] = True
             save_stats(stats)
-            
+
         keyboard = [[InlineKeyboardButton(" PayPal", callback_data=f"pay_paypal:{media_type}:{amount}")], [InlineKeyboardButton(" Gutschein (Amazon)", callback_data=f"pay_voucher:{media_type}:{amount}")], [InlineKeyboardButton("🪙 Krypto", callback_data=f"pay_crypto:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zu den Preisen", callback_data="show_price_options")]]
         msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         context.chat_data['main_message_id'] = msg.message_id
@@ -582,7 +640,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     if data.startswith(("pay_paypal:", "pay_voucher:", "pay_crypto:")):
         _, media_type, amount_str = data.split(":")
         amount = int(amount_str)
-        
+
         if media_type == "livecall":
             price = PRICES[media_type][amount]
             package_info_text = f"{amount} Min Live Call"
@@ -600,7 +658,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if data.startswith("pay_paypal:"):
             await track_event(f"payment_{media_type}", context, user.id)
             await update_payment_log("PayPal", price, package_info_text)
-            
+
             if NOTIFICATION_GROUP_ID:
                 try:
                     user_mention = f"[{escape_markdown(user.first_name, version=2)}](tg://user?id={user.id})"
@@ -613,21 +671,21 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             text = (f"Super! Klicke auf den Link, um die Zahlung für **{package_info_text}** in Höhe von **{price}€** abzuschließen.\n\n" f"Gib als Verwendungszweck bitte deinen Telegram-Namen an.\n\n" f"➡️ [Hier sicher bezahlen]({paypal_link})\n\n")
             if media_type in ["livecall", "treffen"]:
                 text += f"📲 *Melde dich danach bei @{TELEGRAM_USERNAME} mit einem Screenshot deiner Zahlung!*"
-            
-            back_button_data = f"{media_type}_menu" if media_type in ["livecall", "treffen"] else "show_price_options"
+
+            back_button_data = "back_to_treffen_summary" if media_type == "treffen" else (f"{media_type}_menu" if media_type == "livecall" else "show_price_options")
             keyboard = [[InlineKeyboardButton("« Zurück zur Auswahl", callback_data=back_button_data)]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown', disable_web_page_preview=True)
             context.chat_data['main_message_id'] = query.message.message_id
-        
+
         elif data.startswith("pay_voucher:"):
             await track_event(f"payment_{media_type}", context, user.id); await update_payment_log("Gutschein", price, package_info_text)
             context.user_data["awaiting_voucher"] = "amazon"
             text = "Bitte sende mir jetzt deinen Amazon-Gutschein-Code als einzelne Nachricht."
-            back_button_data = f"{media_type}_menu" if media_type in ["livecall", "treffen"] else "show_price_options"
+            back_button_data = "back_to_treffen_summary" if media_type == "treffen" else (f"{media_type}_menu" if media_type == "livecall" else "show_price_options")
             keyboard = [[InlineKeyboardButton("Abbrechen", callback_data=back_button_data)]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
             context.chat_data['main_message_id'] = query.message.message_id
-        
+
         elif data.startswith("pay_crypto:"):
             await track_event(f"payment_{media_type}", context, user.id); await update_payment_log("Krypto", price, package_info_text); text = "Bitte wähle die gewünschte Kryptowährung:"; keyboard = [[InlineKeyboardButton("Bitcoin (BTC)", callback_data=f"show_wallet:btc:{media_type}:{amount}"), InlineKeyboardButton("Ethereum (ETH)", callback_data=f"show_wallet:eth:{media_type}:{amount}")], [InlineKeyboardButton("« Zurück zur Paketauswahl", callback_data="show_price_options")]]; await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
             context.chat_data['main_message_id'] = query.message.message_id
@@ -683,7 +741,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         if context.user_data.get('awaiting_user_id_for_entsperren'): await handle_admin_user_management_input(update, context, "entsperren"); return
         if context.user_data.get('awaiting_user_id_for_discount_deletion'): await handle_admin_delete_user_discount_input(update, context); return
         if context.user_data.get('awaiting_user_id_for_preview_limit'): await handle_admin_preview_limit_input(update, context); return
-    
+
     if context.user_data.get('awaiting_input') == 'treffen_date':
         buchung = context.user_data.get('treffen_buchung', {})
         if re.match(r"^\d{1,2}\.\d{1,2}$", text_input):
@@ -695,36 +753,15 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         else:
             await update.message.reply_text("Das Format ist ungültig. Bitte gib das Datum als `TT.MM` an.")
         return
-        
+
     if context.user_data.get('awaiting_input') == 'treffen_location':
         buchung = context.user_data.get('treffen_buchung', {})
         buchung['location'] = text_input
         context.user_data['awaiting_input'] = None
-        
-        duration = buchung['duration']
-        duration_text = get_package_button_text('treffen', duration, user.id).split(' - ')[0]
-        full_price = PRICES['treffen'][duration]
-        deposit = ceil(full_price / 4)
-        cash_price = full_price * 0.9 # 10% Rabatt
-        
-        summary_text = (
-            f"📅 **Deine Terminanfrage:**\n\n"
-            f"**Dauer:** {duration_text}\n"
-            f"**Datum:** {buchung['date']}\n"
-            f"**Ort:** {buchung['location']}\n\n"
-            f"**Gesamtpreis:** {full_price}€\n"
-            f"**Barzahler-Rabatt (10%):** -{full_price * 0.1:.2f}€\n"
-            f"**Neuer Endpreis:** **{cash_price:.2f}€**\n\n"
-            f"Zur Verifizierung ist eine **Anzahlung von 25% ({deposit}€)** erforderlich. "
-            f"Der Restbetrag wird in bar beim Treffen bezahlt."
-        )
-        
-        await update.message.reply_text("Status: ✅ Verfügbar")
-        keyboard = [[InlineKeyboardButton(f"Anzahlung ({deposit}€) per PayPal", callback_data=f"pay_paypal:treffen:{duration}")],
-                    [InlineKeyboardButton(f"Anzahlung ({deposit}€) per Gutschein", callback_data=f"pay_voucher:treffen:{duration}")],
-                    [InlineKeyboardButton(f"Anzahlung ({deposit}€) per Krypto", callback_data=f"pay_crypto:treffen:{duration}")],
-                    [InlineKeyboardButton("« Abbrechen", callback_data="treffen_menu")]]
-        await update.message.reply_text(summary_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+        # NEU START: Aufruf der zentralisierten Funktion
+        await show_treffen_summary(update, context)
+        # NEU ENDE
         return
 
     if context.user_data.get("awaiting_voucher"):
