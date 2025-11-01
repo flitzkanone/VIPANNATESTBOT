@@ -31,7 +31,6 @@ NOTIFICATION_GROUP_ID = os.getenv("NOTIFICATION_GROUP_ID")
 TELEGRAM_USERNAME = os.getenv("TELEGRAM_USERNAME", "ANNASPICY")
 
 AGE_ANNA = os.getenv("AGE_ANNA", "18")
-# PREVIEW_CAPTION has been moved to the `texts` dictionary for multi-language support.
 
 BTC_WALLET = "1FcgMLNBDLiuDSDip7AStuP19sq47LJB12"
 ETH_WALLET = "0xeeb8FDc4aAe71B53934318707d0e9747C5c66f6e"
@@ -77,6 +76,7 @@ texts = {
         "de": "🎁 Wir haben dich vermisst! 🎁\n\nAls Willkommensgruß erhältst du einen exklusiven **10% Rabatt** auf alle Pakete!\n\nPLUS: Unser **2-für-1 PayPal-Angebot** gilt weiterhin für dich. Nutze die Chance!",
         "en": "🎁 We've missed you! 🎁\n\nAs a welcome back gift, you receive an exclusive **10% discount** on all packages!\n\nPLUS: Our **2-for-1 PayPal offer** is still valid for you. Take the chance!"
     },
+    "discount_text": {"de": "Rabatt", "en": "Discount"},
     "discount_offer_button": {"de": "💸 Zu meinen exklusiven Preisen 💸", "en": "💸 To my exclusive prices 💸"},
 
     # Preview
@@ -167,7 +167,6 @@ texts = {
 def get_text(key: str, context: ContextTypes.DEFAULT_TYPE, **kwargs) -> str:
     """Fetches a string in the user's chosen language."""
     lang = context.user_data.get('language', 'de')  # Default to German
-    # Fallback to English if the German string is missing, then to a placeholder
     text_template = texts.get(key, {}).get(lang) or texts.get(key, {}).get('en', f"<{key}_{lang}_NOT_FOUND>")
     return text_template.format(**kwargs) if kwargs else text_template
 
@@ -270,7 +269,7 @@ def get_package_button_text(media_type: str, amount: int, user_id: int, context:
         elif amount == 1440: duration_text = get_text("meeting_duration_1_day", context)
         elif amount == 2880: duration_text = get_text("meeting_duration_2_days", context)
     else:
-        key = f"package_button_text_{media_type}"
+        key = f"package_button_text_{media_type.lower()}"
         duration_text = get_text(key, context, amount=amount)
 
     if media_type not in ["livecall", "treffen"]:
@@ -370,16 +369,21 @@ async def send_tracked_video(context: ContextTypes.DEFAULT_TYPE, chat_id: int, *
     track_message(context, message.message_id)
     return message
 
-async def query_or_message_edit(update: Update, text: str, **kwargs):
-    context = update.callback_query.context if update.callback_query else update.message.context
+# --- FIXED FUNCTION ---
+async def query_or_message_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, **kwargs):
+    """Edits a message if the update is a callback query, or sends a new one if it's a message."""
     if update.callback_query:
         try:
             await update.callback_query.edit_message_text(text, **kwargs)
-            track_message(context, update.callback_query.message.message_id)
+            # The original message ID is already being tracked if it was sent via a tracked method
+            # Re-tracking an edited message is often not necessary unless you replace the message entirely
         except error.BadRequest as e:
-            if "message is not modified" not in str(e): logger.error(f"Failed to edit message: {e}")
+            if "message is not modified" not in str(e):
+                logger.warning(f"Could not edit message, sending new one. Error: {e}")
+                await send_tracked_message(context, chat_id=update.effective_chat.id, text=text, **kwargs)
     elif update.message:
-        await send_tracked_message(context=context, chat_id=update.effective_chat.id, text=text, **kwargs)
+        await send_tracked_message(context, chat_id=update.effective_chat.id, text=text, **kwargs)
+
 
 async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYPE, media_type: str, start_index: int = 0):
     chat_id = update.effective_chat.id
@@ -425,12 +429,10 @@ async def send_preview_message(update: Update, context: ContextTypes.DEFAULT_TYP
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     chat_id = update.effective_chat.id
-    
-    # Use query's message context if available, for seamless language selection transition
+
     if update.callback_query:
         await cleanup_bot_messages(chat_id, context)
     
-    # --- NEW: Language Selection ---
     if 'language' not in context.user_data:
         await cleanup_bot_messages(chat_id, context)
         keyboard = [
@@ -479,7 +481,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         [InlineKeyboardButton(get_text("live_call_button", context), callback_data="live_call_menu")],
         [InlineKeyboardButton(get_text("meeting_button", context), callback_data="treffen_menu")]
     ]
-    await query_or_message_edit(update, welcome_text, reply_markup=InlineKeyboardMarkup(keyboard))
+    await query_or_message_edit(update, context, welcome_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def show_prices_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -573,7 +575,7 @@ async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🎟️ Gutscheine", callback_data="admin_show_vouchers")],
         [InlineKeyboardButton("👤 Nutzer verwalten", callback_data="admin_user_manage")]
     ]
-    await query_or_message_edit(update, text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+    await query_or_message_edit(update, context, text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def show_user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "👤 *Nutzerverwaltung*\n\nWähle eine Aktion aus:"
@@ -583,7 +585,7 @@ async def show_user_management_menu(update: Update, context: ContextTypes.DEFAUL
         [InlineKeyboardButton("🖼️ Vorschau-Limit anpassen", callback_data="admin_preview_limit_start")],
         [InlineKeyboardButton("« Zurück", callback_data="admin_main_menu")]
     ]
-    await query_or_message_edit(update, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    await query_or_message_edit(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def show_vouchers_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     vouchers = load_vouchers()
@@ -593,7 +595,7 @@ async def show_vouchers_panel(update: Update, context: ContextTypes.DEFAULT_TYPE
         [InlineKeyboardButton("📄 Vouchers als PDF laden", callback_data="download_vouchers_pdf")],
         [InlineKeyboardButton("« Zurück zum Admin-Menü", callback_data="admin_main_menu")]
     ]
-    await query_or_message_edit(update, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    await query_or_message_edit(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def show_manage_discounts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "💸 *Rabatte verwalten*\n\nHier kannst du aktive, vom Admin vergebene Rabatte einsehen und löschen."
@@ -602,7 +604,7 @@ async def show_manage_discounts_menu(update: Update, context: ContextTypes.DEFAU
         [InlineKeyboardButton("👤 Rabatt für Nutzer löschen", callback_data="admin_delete_user_discount_start")],
         [InlineKeyboardButton("« Zurück zum Admin-Menü", callback_data="admin_main_menu")]
     ]
-    await query_or_message_edit(update, text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+    await query_or_message_edit(update, context, text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -611,7 +613,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     chat_id = update.effective_chat.id
     user = update.effective_user
 
-    # --- NEW: Handle Language Selection ---
     if data.startswith("select_lang:"):
         lang_code = data.split(":")[1]
         context.user_data['language'] = lang_code
@@ -820,9 +821,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         package_key = f"{media_type}_{amount}"
         price = get_discounted_price(base_price, user_data.get("discounts"), package_key)
         if price == -1: price = base_price
-        price_str = f"~{base_price}€~ *{price}€* ({get_text('discount_text', context, default='Discount')})" if price != base_price else f"*{price}€*"
+        price_str = f"~{base_price}€~ *{price}€* ({get_text('discount_text', context)})" if price != base_price else f"*{price}€*"
         
-        media_type_str = get_text(f"package_button_text_{media_type}", context, amount="").replace(" ", "") # Bilder/Pictures
+        media_type_str = get_text(f"package_button_text_{media_type.lower()}", context, amount="").replace(str(amount), "").strip()
         text = get_text("package_selection_text", context, amount=amount, media_type=media_type_str, price_str=price_str)
 
         if not user_data.get("paypal_offer_sent"):
@@ -981,12 +982,12 @@ async def handle_admin_preview_limit_input(update: Update, context: ContextTypes
 
 async def execute_manage_preview_limit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str, action: str):
     stats = load_stats(); user_data = stats.get("users", {}).get(user_id)
-    if not user_data: await query_or_message_edit(update, f"Fehler: Nutzer {user_id} nicht gefunden.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_user_manage")]])); return
+    if not user_data: await query_or_message_edit(update, context, f"Fehler: Nutzer {user_id} nicht gefunden.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_user_manage")]])); return
     current_clicks = user_data.get('preview_clicks', 0)
     new_clicks = 0 if action == 'reset' else current_clicks + 25
     stats["users"][user_id]['preview_clicks'] = new_clicks; save_stats(stats)
     text = f"✅ Vorschau-Limit für `{user_id}` ist jetzt *{new_clicks}*."
-    await query_or_message_edit(update, text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_user_manage")]]))
+    await query_or_message_edit(update, context, text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_user_manage")]]))
 
 async def execute_delete_all_discounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats = load_stats(); cleared_count = 0
@@ -995,7 +996,7 @@ async def execute_delete_all_discounts(update: Update, context: ContextTypes.DEF
             del stats["users"][user_id]["discounts"]; cleared_count += 1
     save_stats(stats); await save_discounts_to_telegram(context)
     text = f"✅ Alle Rabatte von *{cleared_count}* Nutzern entfernt."
-    await query_or_message_edit(update, text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_manage_discounts")]]))
+    await query_or_message_edit(update, context, text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_manage_discounts")]]))
 
 async def handle_admin_delete_user_discount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['awaiting_user_id_for_discount_deletion'] = False; user_id_to_clear = update.message.text
@@ -1011,8 +1012,8 @@ async def execute_delete_user_discount(update: Update, context: ContextTypes.DEF
     if user_id_to_clear in stats["users"] and "discounts" in stats["users"][user_id_to_clear]:
         del stats["users"][user_id_to_clear]["discounts"]; save_stats(stats); await save_discounts_to_telegram(context)
         text = f"✅ Rabatte für `{user_id_to_clear}` entfernt."
-        await query_or_message_edit(update, text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_manage_discounts")]]))
-    else: await query_or_message_edit(update, f"ℹ️ Fehler: Nutzer `{user_id_to_clear}` hat keine Rabatte.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_manage_discounts")]]))
+        await query_or_message_edit(update, context, text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_manage_discounts")]]))
+    else: await query_or_message_edit(update, context, f"ℹ️ Fehler: Nutzer `{user_id_to_clear}` hat keine Rabatte.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Zurück", callback_data="admin_manage_discounts")]]))
 
 async def post_init(application: Application):
     await load_discounts_from_telegram(application)
